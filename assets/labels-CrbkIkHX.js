@@ -1,0 +1,1 @@
+var e={pix:`Pix`,dinheiro:`Dinheiro`,debito:`Cartão de débito`,credito:`Cartão de crédito`,boleto:`Boleto`,transferencia:`Transferência`},t={weekly:`Semanal`,monthly:`Mensal`,quarterly:`Trimestral`,semiannual:`Semestral`,yearly:`Anual`};export{t as n,e as t};
