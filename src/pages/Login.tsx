@@ -3,7 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
 import { getAuthErrorMessage } from "../utils/authErrors";
-import "./Auth.css";
+import AuthShell from "../components/AuthShell";
+import PasswordField from "../components/PasswordField";
+import { MailIcon } from "../components/icons";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -28,45 +30,43 @@ export default function Login() {
   }
 
   return (
-    <div className="auth-page">
-      <div className="auth-card">
-        <h1 className="auth-brand">emdia.com</h1>
-        <p className="auth-subtitle">Entre para acompanhar suas finanças</p>
+    <AuthShell
+      mode="login"
+      title="Bem-vindo de volta"
+      subtitle="Acesse sua conta para acompanhar suas finanças."
+    >
+      {error && <div className="auth-error">{error}</div>}
 
-        {error && <div className="auth-error">{error}</div>}
+      <form className="auth-form" onSubmit={handleSubmit}>
+        <div className="auth-input">
+          <span className="auth-input-icon">
+            <MailIcon />
+          </span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="E-mail"
+            autoComplete="email"
+            required
+          />
+        </div>
 
-        <form className="auth-form" onSubmit={handleSubmit}>
-          <label className="auth-field">
-            <span>E-mail</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="voce@exemplo.com"
-              required
-            />
-          </label>
+        <PasswordField
+          value={password}
+          onChange={setPassword}
+          placeholder="Senha"
+          autoComplete="current-password"
+        />
 
-          <label className="auth-field">
-            <span>Senha</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Sua senha"
-              required
-            />
-          </label>
+        <button className="auth-submit" type="submit" disabled={loading}>
+          {loading ? "Entrando..." : "Entrar"}
+        </button>
+      </form>
 
-          <button className="auth-submit" type="submit" disabled={loading}>
-            {loading ? "Entrando..." : "Entrar"}
-          </button>
-        </form>
-
-        <p className="auth-switch">
-          Ainda não tem uma conta? <Link to="/cadastro">Cadastre-se</Link>
-        </p>
-      </div>
-    </div>
+      <p className="auth-switch">
+        Ainda não tem uma conta? <Link to="/cadastro">Criar conta</Link>
+      </p>
+    </AuthShell>
   );
 }
