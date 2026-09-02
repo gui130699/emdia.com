@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", "Manrope", system-ui, "Segoe UI", Roboto, sans-serif;
+
+  --color-brand-50: #ecfdf5;
+  --color-brand-100: #d1fae5;
+  --color-brand-200: #a7f3d0;
+  --color-brand-300: #6ee7b7;
+  --color-brand-400: #34d399;
+  --color-brand-500: #10b981;
+  --color-brand-600: #059669;
+  --color-brand-700: #047a54;
+  --color-brand-800: #065f42;
+  --color-brand-900: #064e3b;
+
+  --color-petrol-50: #eef6f6;
+  --color-petrol-100: #d3e9e8;
+  --color-petrol-500: #0f6466;
+  --color-petrol-600: #0c4f50;
+  --color-petrol-700: #0a3e40;
+  --color-petrol-800: #08302f;
+  --color-petrol-900: #06211f;
+
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+  --color-info-500: #3b82f6;
+  --color-info-600: #2563eb;
+
+  --color-ink-900: #10201b;
+  --color-ink-700: #33403f;
+  --color-ink-500: #5b6b67;
+  --color-ink-400: #7a8a85;
+  --color-ink-300: #9aa8a4;
+  --color-ink-100: #e6ebe9;
+  --color-ink-50: #f4f7f6;
+
+  /* Adaptive card/panel surface — use bg-surface instead of bg-white for
+     anything that should flip in dark mode. Sidebar, the credit-card
+     visual, and avatar initials keep literal white/black on purpose and
+     stay untouched. */
+  --color-surface: #ffffff;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+  }
+
+  /* Real dark mode, applied globally: since every utility class compiles
+     to var(--color-*), redefining the tokens here re-themes the whole app
+     (cards, text, borders, tables) without touching each component. */
+  .dark {
+    --color-surface: #151f1b;
+    --color-ink-50: #0c1512;
+    --color-ink-100: #263630;
+    --color-ink-300: #5c6d66;
+    --color-ink-400: #8a9c94;
+    --color-ink-500: #aebbb4;
+    --color-ink-700: #dce6e1;
+    --color-ink-900: #f3f8f5;
+  }
+
+  .dark body {
+    color-scheme: dark;
+  }
+}
+
+/* Compact interface density: tighten the paddings/gaps used throughout
+   card grids and page containers without needing a bespoke class on
+   every card. */
+[data-density="compact"] .p-5 {
+  padding: 0.85rem;
+}
+[data-density="compact"] .p-4 {
+  padding: 0.65rem;
+}
+[data-density="compact"] .py-6 {
+  padding-top: 0.85rem;
+  padding-bottom: 0.85rem;
+}
+[data-density="compact"] .gap-6 {
+  gap: 1rem;
+}
+[data-density="compact"] .gap-4 {
+  gap: 0.65rem;
+}
+[data-density="compact"] .space-y-6 > * + * {
+  margin-top: 1rem;
+}
+[data-density="compact"] .space-y-4 > * + * {
+  margin-top: 0.65rem;
+}
