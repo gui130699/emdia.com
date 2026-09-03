@@ -20,7 +20,8 @@ const schema = z.object({
   institutionLogoUrl: z.string().optional(),
   type: z.enum(["credito", "debito"]),
   lastFourDigits: z.string().regex(/^\d{4}$/, "Informe os últimos 4 números"),
-  limit: z.number().nonnegative(),
+  limit: z.number().nonnegative().optional(),
+  limitUnknown: z.boolean(),
   closingDay: z.number().min(1).max(31),
   dueDay: z.number().min(1).max(31),
   accountId: z.string().optional(),
@@ -48,31 +49,48 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: initial ?? {
-      name: "",
-      institution: "",
-      institutionCode: "",
-      institutionIspb: "",
-      institutionLogoUrl: "",
-      type: "credito",
-      lastFourDigits: "",
-      limit: 0,
-      closingDay: 5,
-      dueDay: 15,
-      accountId: bankAccounts[0]?.id ?? "",
-      color: COLORS[0],
-      useCustomColor: false,
-    },
+    defaultValues: initial
+      ? {
+          ...initial,
+          limit: initial.limit,
+          limitUnknown: initial.limit == null,
+          // Editing a card is exactly where an unconfirmed
+          // closing/due day (e.g. a card created from a statement
+          // import) gets resolved into a real one — these two always
+          // need a concrete number to save through this form.
+          closingDay: initial.closingDay ?? 5,
+          dueDay: initial.dueDay ?? 15,
+        }
+      : {
+          name: "",
+          institution: "",
+          institutionCode: "",
+          institutionIspb: "",
+          institutionLogoUrl: "",
+          type: "credito",
+          lastFourDigits: "",
+          limit: 0,
+          limitUnknown: false,
+          closingDay: 5,
+          dueDay: 15,
+          accountId: bankAccounts[0]?.id ?? "",
+          color: COLORS[0],
+          useCustomColor: false,
+        },
   });
 
   const color = watch("color");
   const useCustomColor = watch("useCustomColor");
+  const limitUnknown = watch("limitUnknown");
 
   return (
     <form
       id={formId}
-      onSubmit={handleSubmit((values) =>
-        onSubmit({ ...values, limit: values.type === "debito" ? 0 : values.limit })
+      onSubmit={handleSubmit(({ limitUnknown, ...values }) =>
+        onSubmit({
+          ...values,
+          limit: values.type === "debito" ? 0 : limitUnknown ? undefined : values.limit,
+        })
       )}
       className="space-y-4"
     >
@@ -121,8 +139,20 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
       </div>
 
       <FormField label="Limite" error={errors.limit?.message}>
-        <Controller control={control} name="limit" render={({ field }) => <CurrencyInput value={field.value} onChange={field.onChange} />} />
+        {limitUnknown ? (
+          <input className={inputClass} value="Não informado" disabled />
+        ) : (
+          <Controller
+            control={control}
+            name="limit"
+            render={({ field }) => <CurrencyInput value={field.value ?? 0} onChange={field.onChange} />}
+          />
+        )}
       </FormField>
+      <label className="-mt-2 flex items-center gap-2 text-xs font-medium text-ink-600">
+        <input type="checkbox" className="h-4 w-4 rounded border-ink-300 text-brand-600" {...register("limitUnknown")} />
+        Não sei o limite deste cartão
+      </label>
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Dia de fechamento" htmlFor="closingDay" error={errors.closingDay?.message}>

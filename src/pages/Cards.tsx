@@ -17,7 +17,7 @@ import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
 import { getCurrentInvoicePeriod, transactionsInPeriod, signedCardAmount } from "../utils/cardInvoice";
-import { cardConsumptionBreakdown } from "../services/reportService";
+import { cardConsumptionBreakdown, cardStatementSummary } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
 import { formatDate, formatDateObj } from "../utils/date";
 import type { CreditCard as CreditCardType } from "../types/finance";
@@ -78,6 +78,7 @@ export default function Cards() {
         paidAmount: record?.paidAmount,
         remainingAmount: record?.remainingAmount,
         invoiceId: record?.id,
+        statementBalance: record?.statementBalance,
         needsSetup: false,
       };
     });
@@ -101,6 +102,8 @@ export default function Cards() {
   const categoryData = activeInvoice
     ? cardConsumptionBreakdown(activeInvoice.purchases, categories, activeInvoice.card.id)
     : [];
+  const consumptionTotal = useMemo(() => categoryData.reduce((sum, item) => sum + item.value, 0), [categoryData]);
+  const statementSummary = activeInvoice ? cardStatementSummary(activeInvoice.purchases) : null;
 
   async function handleReopenInvoice() {
     if (!pendingReopenInvoiceId) return;
@@ -248,6 +251,12 @@ export default function Cards() {
                   <p className="text-xs text-ink-400">
                     Vencimento {formatDateObj(activeInvoice.period.dueDate)}
                   </p>
+                  {activeInvoice.statementBalance != null && Math.abs(activeInvoice.statementBalance - activeInvoice.total) >= 0.01 && (
+                    <p className="mt-1 text-xs text-warning-600">
+                      Posição informada pelo banco: {formatCurrency(activeInvoice.statementBalance)} — pode haver uma
+                      linha do extrato não importada.
+                    </p>
+                  )}
                   <div className="mt-4">
                     <div className="mb-1 flex justify-between text-xs text-ink-500">
                       <span>Limite utilizado</span>
@@ -304,13 +313,48 @@ export default function Cards() {
                 </div>
 
                 <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm xl:col-span-2">
-                  <h2 className="text-base font-bold text-ink-900">Gastos por categoria (fatura atual)</h2>
+                  <h2 className="text-base font-bold text-ink-900">Consumo por categoria (compras e parcelas do ciclo)</h2>
                   {categoryData.length === 0 ? (
                     <EmptyState icon={Receipt} title="Sem compras nesta fatura" />
                   ) : (
-                    <CategoryChart data={categoryData} total={activeInvoice.total} />
+                    <CategoryChart data={categoryData} total={consumptionTotal} />
                   )}
                 </div>
+
+                {statementSummary &&
+                  (statementSummary.charges > 0 || statementSummary.refunds > 0 || statementSummary.previousBalance > 0) && (
+                    <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm xl:col-span-3">
+                      <h2 className="text-base font-bold text-ink-900">Composição da fatura</h2>
+                      <p className="mt-1 text-xs text-ink-400">
+                        A fatura não é só consumo — separa o que é compra nova do que é encargo, saldo anterior ou
+                        estorno, para não confundir os dois totais acima.
+                      </p>
+                      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-xl bg-ink-50 p-3">
+                          <p className="text-xs text-ink-400">Consumo do ciclo</p>
+                          <p className="mt-0.5 text-sm font-semibold text-ink-900">{formatCurrency(consumptionTotal)}</p>
+                        </div>
+                        {statementSummary.previousBalance > 0 && (
+                          <div className="rounded-xl bg-ink-50 p-3">
+                            <p className="text-xs text-ink-400">Saldo anterior</p>
+                            <p className="mt-0.5 text-sm font-semibold text-ink-900">{formatCurrency(statementSummary.previousBalance)}</p>
+                          </div>
+                        )}
+                        {statementSummary.charges > 0 && (
+                          <div className="rounded-xl bg-ink-50 p-3">
+                            <p className="text-xs text-ink-400">Encargos (juros, IOF, multa)</p>
+                            <p className="mt-0.5 text-sm font-semibold text-danger-600">{formatCurrency(statementSummary.charges)}</p>
+                          </div>
+                        )}
+                        {statementSummary.refunds > 0 && (
+                          <div className="rounded-xl bg-ink-50 p-3">
+                            <p className="text-xs text-ink-400">Estornos e créditos</p>
+                            <p className="mt-0.5 text-sm font-semibold text-success-600">-{formatCurrency(statementSummary.refunds)}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
               </div>
             )}
 

@@ -57,7 +57,7 @@ function maskIdentifier(value?: string): string {
   return "••••" + value.slice(-4);
 }
 
-type Step = "select" | "product-uncertain" | "match" | "choose-account" | "choose-card" | "mapping" | "preview" | "reconciliation";
+type Step = "select" | "product-uncertain" | "match" | "choose-account" | "choose-card" | "mapping" | "preview" | "reconciliation" | "card-statement";
 
 export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixedCardId }: ImportWizardProps) {
   const {
@@ -73,6 +73,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     addCard,
     reconcileAccountBalance,
     createBalanceAdjustment,
+    recordCardStatement,
     reloadAll,
   } = useFinanceData();
   const { show } = useToast();
@@ -89,6 +90,13 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [targetCardId, setTargetCardId] = useState(fixedCardId ?? "");
   const [loadingLabel, setLoadingLabel] = useState("");
 
+  // Files queued after the first one when the user selects several at
+  // once (e.g. extrato + fatura de dois meses) — each is processed through
+  // the full wizard flow in turn, only advancing once the current one
+  // actually finishes (never on cancel, which aborts the whole batch).
+  const [fileQueue, setFileQueue] = useState<File[]>([]);
+  const [queueTotal, setQueueTotal] = useState(0);
+
   const [fileName, setFileName] = useState("");
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvRows, setCsvRows] = useState<string[][]>([]);
@@ -101,6 +109,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [committedBatchId, setCommittedBatchId] = useState<string | null>(null);
   const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" | "initial_reference" } | null>(null);
   const [correctedBalance, setCorrectedBalance] = useState(0);
+  const [cardStatement, setCardStatement] = useState<{ computedTotal: number; statementBalance: number; difference: number } | null>(null);
 
   // "match" step (OFX account/card imports)
   const [detectedCode, setDetectedCode] = useState<string | undefined>();
@@ -157,12 +166,32 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setNewAccountBalance(0);
     setNewAccountAsOf(todayISO());
     setNewAccountBalanceTouched(false);
+    setCardStatement(null);
     setLoadingLabel("");
   }
 
   function handleClose() {
     reset();
+    setFileQueue([]);
+    setQueueTotal(0);
     onClose();
+  }
+
+  /** Called when one file's flow finishes successfully (never on cancel) —
+   * advances to the next queued file instead of closing, if there is one.
+   * Reads fileQueue directly (not via the setState updater form) since
+   * StrictMode double-invokes updater callbacks, which would otherwise
+   * process the next file twice. */
+  function finishOneFile() {
+    const next = fileQueue[0];
+    setFileQueue((prev) => prev.slice(1));
+    reset();
+    if (next) {
+      void handleFile(next);
+    } else {
+      setQueueTotal(0);
+      onClose();
+    }
   }
 
   function buildCtx(explicitTarget: { accountId?: string; cardId?: string }, extraAccounts: typeof bankAccounts = [], extraCards: typeof cards = []) {
@@ -500,8 +529,16 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
         setReconciliation(result);
         setCorrectedBalance(result.reported);
         setStep("reconciliation");
+      } else if (mode === "card" && lastOfx?.balance && target.cardId) {
+        const result = await recordCardStatement(target.cardId, Math.abs(lastOfx.balance.amount));
+        if (result && Math.abs(result.difference) >= 0.01) {
+          setCardStatement(result);
+          setStep("card-statement");
+        } else {
+          finishOneFile();
+        }
       } else {
-        handleClose();
+        finishOneFile();
       }
     } catch {
       show("Não foi possível concluir a importação.", "error");
@@ -515,7 +552,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     const asOfDate = lastOfx.balance.asOf ?? preview?.periodEnd ?? todayISO();
     await reconcileAccountBalance(target.accountId, correctedBalance, asOfDate, "manual");
     show("Saldo atualizado.");
-    handleClose();
+    finishOneFile();
   }
 
   async function handleCreateAdjustment() {
@@ -526,7 +563,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       await reconcileAccountBalance(target.accountId, reconciliation.reported, asOfDate, "reconciliation", committedBatchId);
     }
     show("Ajuste de saldo criado.");
-    handleClose();
+    finishOneFile();
   }
 
   if (!open) return null;
@@ -542,7 +579,14 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       <button aria-label="Fechar" className="absolute inset-0 bg-black/40" onClick={handleClose} />
       <div className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-surface shadow-2xl md:max-h-[85dvh] md:w-full md:max-w-3xl md:rounded-2xl">
         <div className="flex items-center justify-between border-b border-ink-100 px-5 py-4">
-          <h2 className="text-lg font-bold text-ink-900">Importar {mode === "card" ? "fatura do cartão" : "extrato"}</h2>
+          <div>
+            <h2 className="text-lg font-bold text-ink-900">Importar {mode === "card" ? "fatura do cartão" : "extrato"}</h2>
+            {queueTotal > 1 && (
+              <p className="text-xs text-ink-400">
+                Arquivo {queueTotal - fileQueue.length} de {queueTotal}
+              </p>
+            )}
+          </div>
           <button onClick={handleClose} aria-label="Fechar" className="flex h-9 w-9 items-center justify-center rounded-full text-ink-400 hover:bg-ink-50">
             <X size={18} />
           </button>
@@ -567,15 +611,23 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
               <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 px-6 py-12 text-center hover:border-brand-400 hover:bg-brand-50/40">
                 <Upload size={28} className="text-brand-600" />
-                <span className="text-sm font-semibold text-ink-900">Selecione um arquivo OFX, CSV ou QIF</span>
-                <span className="text-xs text-ink-400">Seus arquivos são processados localmente, no seu dispositivo.</span>
+                <span className="text-sm font-semibold text-ink-900">Selecione um ou mais arquivos OFX, CSV ou QIF</span>
+                <span className="text-xs text-ink-400">
+                  Seus arquivos são processados localmente, no seu dispositivo. Selecionando vários, cada um passa pela
+                  revisão em sequência.
+                </span>
                 <input
                   type="file"
                   accept=".ofx,.csv,.qif,text/csv,application/x-ofx"
+                  multiple
                   className="hidden"
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) void handleFile(file);
+                    const files = Array.from(e.target.files ?? []);
+                    if (files.length === 0) return;
+                    const [first, ...rest] = files;
+                    setFileQueue(rest);
+                    setQueueTotal(files.length);
+                    void handleFile(first);
                   }}
                 />
               </label>
@@ -1122,7 +1174,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
               )}
 
               <button
-                onClick={handleClose}
+                onClick={finishOneFile}
                 className={
                   reconciliation.status !== "discrepancy"
                     ? "w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700"
@@ -1130,6 +1182,27 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                 }
               >
                 {reconciliation.status !== "discrepancy" ? "Concluir" : "Revisar movimentações e decidir depois"}
+              </button>
+            </div>
+          )}
+
+          {step === "card-statement" && cardStatement && (
+            <div className="space-y-4">
+              <div className="space-y-3 rounded-lg bg-warning-500/10 px-4 py-3 text-sm text-warning-700">
+                <p className="flex items-center gap-2 font-semibold">
+                  <AlertTriangle size={18} /> A posição informada pelo banco é diferente do que calculamos.
+                </p>
+                <p className="text-xs">
+                  Posição informada na fatura: {formatCurrency(cardStatement.statementBalance)} · Calculado a partir das
+                  compras importadas: {formatCurrency(cardStatement.computedTotal)}
+                </p>
+                <p className="text-xs">
+                  Isso costuma acontecer quando uma linha do extrato (saldo anterior, juros, IOF, multa ou um pagamento)
+                  não foi selecionada durante a importação — confira em "Revisar" nos lançamentos com esse aviso.
+                </p>
+              </div>
+              <button onClick={finishOneFile} className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700">
+                Entendi
               </button>
             </div>
           )}

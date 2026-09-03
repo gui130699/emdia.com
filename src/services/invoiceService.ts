@@ -58,6 +58,46 @@ export const invoiceService = {
     return store.create(userId, invoice);
   },
 
+  /** Records the bank's own reported statement position for a cycle
+   * (BALAMT from a card OFX) alongside what EM DIA computed from the
+   * imported transactions — a mismatch usually means some statement lines
+   * (saldo anterior, encargos, um pagamento) weren't selected during
+   * import, not that either number is "wrong". Never touches payment state:
+   * if the cycle is already paid/partial, only the reference figure is
+   * updated. */
+  async recordStatementSnapshot(
+    userId: string,
+    cardId: string,
+    period: InvoicePeriod,
+    statementBalance: number,
+    computedTotal: number
+  ): Promise<Invoice> {
+    const now = new Date().toISOString();
+    const existing = await this.findByPeriod(userId, cardId, period.periodKey);
+    if (existing) {
+      await store.update(userId, existing.id, { statementBalance, updatedAt: now });
+      return { ...existing, statementBalance, updatedAt: now };
+    }
+    const today = new Date();
+    const status: Invoice["status"] = today > period.dueDate ? "overdue" : today > period.cycleEnd ? "closed" : "open";
+    const invoice: Invoice = {
+      id: generateId(),
+      userId,
+      cardId,
+      periodKey: period.periodKey,
+      periodStart: period.cycleStart.toISOString().slice(0, 10),
+      periodEnd: period.cycleEnd.toISOString().slice(0, 10),
+      closingDate: period.cycleEnd.toISOString().slice(0, 10),
+      dueDate: period.dueDate.toISOString().slice(0, 10),
+      total: computedTotal,
+      statementBalance,
+      status,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return store.create(userId, invoice);
+  },
+
   /** Removes the paid record — the cycle falls back to being computed
    * dynamically as open/closed/overdue from its transactions again. */
   remove: (userId: string, id: string) => store.remove(userId, id),

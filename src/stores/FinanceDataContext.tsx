@@ -21,7 +21,7 @@ import { balanceSnapshotService } from "../services/balanceSnapshotService";
 import { recurringBillRuleService, type RecurringBillRuleInput } from "../services/recurringBillRuleService";
 import { computeAccountBalance, computeTotalBalance } from "../services/balanceService";
 import { generateId } from "../services/localStore";
-import { getCurrentInvoicePeriod, type InvoicePeriod } from "../utils/cardInvoice";
+import { getCurrentInvoicePeriod, invoiceTotalForPeriod, type InvoicePeriod } from "../utils/cardInvoice";
 import { migrateFromLocalStorage } from "../db/migrateFromLocalStorage";
 import { startSyncEngine, subscribeSyncStatus, type AggregateSyncStatus } from "../db/syncService";
 import { importService } from "../services/importService";
@@ -113,6 +113,18 @@ interface FinanceDataValue {
     importBatchId?: string
   ) => Promise<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" | "initial_reference" }>;
   createBalanceAdjustment: (accountId: string, amount: number, date: string, notes?: string) => Promise<void>;
+
+  /** Records the bank's own reported statement position for a card's
+   * current cycle (BALAMT from a card OFX) so it can be compared against
+   * what EM DIA computed from the imported transactions — a mismatch
+   * usually means a statement line (saldo anterior, encargos, um
+   * pagamento) wasn't selected during import, not that either figure is
+   * wrong. Returns undefined when the card has no computable cycle yet
+   * (fechamento/vencimento not informed). */
+  recordCardStatement: (
+    cardId: string,
+    statementBalance: number
+  ) => Promise<{ computedTotal: number; statementBalance: number; difference: number } | undefined>;
 
   addTransaction: (input: TransactionInput) => Promise<void>;
   updateTransaction: (id: string, input: Partial<TransactionInput>) => Promise<void>;
@@ -318,6 +330,20 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setBankAccounts(await bankAccountService.list(userId));
 
         return { calculated, reported: reportedBalance, difference, status };
+      },
+      async recordCardStatement(cardId, statementBalance) {
+        const [freshCard, freshTransactions] = await Promise.all([
+          cardService.get(userId, cardId),
+          transactionService.list(userId),
+        ]);
+        if (!freshCard) return undefined;
+        const period = getCurrentInvoicePeriod(freshCard);
+        if (!period) return undefined;
+        const computedTotal = invoiceTotalForPeriod(freshTransactions, cardId, period);
+        await invoiceService.recordStatementSnapshot(userId, cardId, period, statementBalance, computedTotal);
+        setInvoices(await invoiceService.list(userId));
+        const difference = Math.round((statementBalance - computedTotal) * 100) / 100;
+        return { computedTotal, statementBalance, difference };
       },
       async createBalanceAdjustment(accountId, amount, date, notes) {
         await transactionService.create(userId, {

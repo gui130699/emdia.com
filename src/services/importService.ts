@@ -209,6 +209,10 @@ export interface ImportPreviewRow {
     destinationAccountId?: string;
     invoiceCardId?: string;
     invoicePeriod?: InvoicePeriod;
+    /** The invoice's real total — may differ from the row's own amount
+     * when this payment only covers what's left of an already-partial
+     * invoice, in which case row.amount is just the remaining piece. */
+    invoiceTotal?: number;
     installmentCount?: number;
     installmentTotalAmount?: number;
     /** Which parcela this row is (1 when it's the first, but a plan can
@@ -431,23 +435,38 @@ async function classifyRows(
 
   const unpaidBills = ctx.bills.filter((b) => b.status !== "paid");
 
-  // Currently-open invoice per credit card, used to suggest linking a
+  // Unpaid invoice cycles per credit card, used to suggest linking a
   // "PAGAMENTO CARTAO"-style statement line instead of double-counting it
-  // as a generic expense. Deliberately based on *today's* cycle rather than
-  // the row's date — matching a historical statement's exact past cycle
-  // requires date math that's easy to get subtly wrong, and a wrong match
-  // here would misattribute a real payment, so we only offer this
-  // suggestion for statements imported close to when the payment happened.
+  // as a generic expense. Checks today's cycle *and* the two before it —
+  // a payment can arrive after its cycle has already rolled over (paid
+  // late, or the statement for that cycle was only imported afterward), so
+  // matching only "today's" cycle would miss it entirely.
   const openInvoiceByCard = ctx.target.accountId
     ? ctx.cards
         .filter((c) => c.type === "credito")
-        .map((card) => {
-          const period = getCurrentInvoicePeriod(card);
-          const total = invoiceTotalForPeriod(ctx.existingTransactions, card.id, period);
-          const alreadyPaid = !!period && ctx.invoices.some((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey && inv.status === "paid");
-          return { card, period, total, alreadyPaid };
+        .flatMap((card) => {
+          const candidates: { card: CreditCard; period: InvoicePeriod; total: number; invoiceTotal: number }[] = [];
+          let reference = new Date();
+          for (let i = 0; i < 3; i++) {
+            const period = getCurrentInvoicePeriod(card, reference);
+            if (!period) break;
+            const record = ctx.invoices.find((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey);
+            // A partially-paid invoice can still receive a second payment
+            // for what's left — only a fully paid one has nothing more to
+            // match against. `total` is what this payment should match
+            // against (the remaining balance for a partial invoice);
+            // `invoiceTotal` is the real total, kept separate so commit()
+            // never overwrites it with just the remaining piece.
+            if (record?.status !== "paid") {
+              const computedTotal = invoiceTotalForPeriod(ctx.existingTransactions, card.id, period);
+              const total = record?.status === "partial" ? (record.remainingAmount ?? 0) : computedTotal;
+              const invoiceTotal = record?.status === "partial" ? record.total : computedTotal;
+              if (total > 0) candidates.push({ card, period, total, invoiceTotal });
+            }
+            reference = new Date(period.cycleStart.getTime() - 24 * 60 * 60 * 1000);
+          }
+          return candidates;
         })
-        .filter((entry): entry is typeof entry & { period: InvoicePeriod } => !!entry.period && entry.total > 0 && !entry.alreadyPaid)
     : [];
 
   const rows: ImportPreviewRow[] = [];
@@ -543,6 +562,7 @@ async function classifyRows(
           kind: "invoice",
           invoiceCardId: invoiceMatch.card.id,
           invoicePeriod: invoiceMatch.period,
+          invoiceTotal: invoiceMatch.invoiceTotal,
           label: `Este lançamento pode ser o pagamento da fatura do cartão "${invoiceMatch.card.name}".`,
           confirmed: score >= 90,
           confidenceScore: score,
@@ -765,7 +785,8 @@ export const importService = {
       }
 
       if (row.suggestion?.kind === "invoice" && row.suggestion.confirmed && row.suggestion.invoiceCardId && row.suggestion.invoicePeriod) {
-        const invoiceId = generateId();
+        const existingInvoice = await invoiceService.findByPeriod(userId, row.suggestion.invoiceCardId, row.suggestion.invoicePeriod.periodKey);
+        const invoiceId = existingInvoice?.id ?? generateId();
         const transaction = await transactionService.create(userId, {
           type: "expense",
           description: `Pagamento de fatura — ${row.description}`,
@@ -786,22 +807,26 @@ export const importService = {
           normalizedDescription: row.normalizedDescription,
           importedAt: new Date().toISOString(),
         });
-        await invoiceService.recordPayment(
+        const updatedInvoice = await invoiceService.recordPayment(
           userId,
           row.suggestion.invoiceCardId,
           row.suggestion.invoicePeriod,
-          row.amount,
+          row.suggestion.invoiceTotal ?? row.amount,
           row.amount,
           target.accountId ?? "",
           transaction.id,
           invoiceId
         );
-        await installmentService.markInstallmentsPaid(
-          userId,
-          row.suggestion.invoiceCardId,
-          row.suggestion.invoicePeriod.cycleStart,
-          row.suggestion.invoicePeriod.cycleEnd
-        );
+        // A partial payment doesn't settle any specific parcela — only mark
+        // installments paid once the invoice is fully covered.
+        if (updatedInvoice.status === "paid") {
+          await installmentService.markInstallmentsPaid(
+            userId,
+            row.suggestion.invoiceCardId,
+            row.suggestion.invoicePeriod.cycleStart,
+            row.suggestion.invoicePeriod.cycleEnd
+          );
+        }
         newRecords++;
         continue;
       }
