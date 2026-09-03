@@ -1,8 +1,9 @@
-import { createLocalCollection, generateId } from "./localStore";
+import { createRepository } from "../db/dexieRepository";
+import { generateId } from "./localStore";
 import type { Category } from "../types/finance";
 import { DEFAULT_CATEGORIES } from "../constants/categories";
 
-const store = createLocalCollection<Category>("categories");
+const store = createRepository<Category>("categories");
 
 export interface CategoryInput {
   name: string;

@@ -1,7 +1,5 @@
-import { readValue, writeValue } from "./localStore";
+import { getDb } from "../db/database";
 import type { UserSettings } from "../types/finance";
-
-const KEY = "settings";
 
 export const DEFAULT_SETTINGS: UserSettings = {
   notifications: {
@@ -19,11 +17,12 @@ export const DEFAULT_SETTINGS: UserSettings = {
 };
 
 export const settingsService = {
-  get(userId: string): UserSettings {
-    return readValue(userId, KEY, DEFAULT_SETTINGS);
+  async get(userId: string): Promise<UserSettings> {
+    const row = await getDb(userId).settings.get("current");
+    return row?.value ?? DEFAULT_SETTINGS;
   },
 
-  save(userId: string, settings: UserSettings) {
-    writeValue(userId, KEY, settings);
+  async save(userId: string, settings: UserSettings): Promise<void> {
+    await getDb(userId).settings.put({ key: "current", value: settings });
   },
 };

@@ -5,7 +5,10 @@ import { useToast } from "../../stores/ToastContext";
 import SettingsCard from "./SettingsCard";
 import BankSelect from "../institutions/BankSelect";
 import BankLogo from "../institutions/BankLogo";
+import CurrencyInput from "../ui/CurrencyInput";
+import FormField from "../ui/FormField";
 import { inputClass } from "../ui/formStyles";
+import { formatCurrency } from "../../utils/currency";
 import type { BankAccountKind } from "../../types/finance";
 import type { FinancialInstitution } from "../../types/institution";
 
@@ -13,20 +16,35 @@ const KIND_LABELS: Record<BankAccountKind, string> = {
   corrente: "Conta corrente",
   poupanca: "Poupança",
   digital: "Conta digital",
-  carteira: "Carteira",
+  carteira: "Carteira / Dinheiro",
+  outro: "Outro",
 };
 
 export default function BankAccountsCard() {
-  const { bankAccounts, addBankAccount, deleteBankAccount } = useFinanceData();
+  const { bankAccounts, addBankAccount, deleteBankAccount, getAccountBalance } = useFinanceData();
   const { show } = useToast();
 
   const [institution, setInstitution] = useState<FinancialInstitution | null>(null);
+  const [name, setName] = useState("");
   const [kind, setKind] = useState<BankAccountKind>("corrente");
+  const [initialBalance, setInitialBalance] = useState(0);
+  const [adding, setAdding] = useState(false);
+
+  async function handleAddWallet() {
+    setInstitution(null);
+    setKind("carteira");
+    setName("Carteira");
+    setAdding(true);
+  }
 
   async function handleAdd() {
-    if (!institution) return;
-    await addBankAccount(institution.name, kind, institution);
+    if (!name.trim()) return;
+    await addBankAccount(name, kind, institution ?? undefined, initialBalance);
     setInstitution(null);
+    setName("");
+    setKind("corrente");
+    setInitialBalance(0);
+    setAdding(false);
     show("Conta adicionada.");
   }
 
@@ -44,7 +62,9 @@ export default function BankAccountsCard() {
               />
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-ink-900">{account.name}</p>
-                <p className="truncate text-xs text-ink-400">{KIND_LABELS[account.kind]}</p>
+                <p className="truncate text-xs text-ink-400">
+                  {KIND_LABELS[account.kind]} · {formatCurrency(getAccountBalance(account.id))}
+                </p>
               </div>
             </div>
             <button
@@ -58,23 +78,66 @@ export default function BankAccountsCard() {
         ))}
       </ul>
 
-      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-        <div className="flex-1">
-          <BankSelect value={institution} onSelect={setInstitution} />
+      {!adding ? (
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={() => setAdding(true)}
+            className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <Plus size={15} /> Adicionar conta
+          </button>
+          <button
+            onClick={handleAddWallet}
+            className="min-h-11 rounded-lg border border-ink-100 px-3 text-sm font-semibold text-ink-700 hover:bg-ink-50"
+          >
+            + Carteira
+          </button>
         </div>
-        <select className={inputClass} value={kind} onChange={(e) => setKind(e.target.value as BankAccountKind)}>
-          {Object.entries(KIND_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-        <button
-          onClick={handleAdd}
-          disabled={!institution}
-          className="flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-        >
-          <Plus size={15} /> Adicionar
-        </button>
-      </div>
+      ) : (
+        <div className="mt-4 space-y-3 rounded-xl border border-ink-100 p-3">
+          {kind !== "carteira" && (
+            <FormField label="Instituição">
+              <BankSelect
+                value={institution}
+                onSelect={(inst) => {
+                  setInstitution(inst);
+                  if (!name) setName(inst.name);
+                }}
+              />
+            </FormField>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <FormField label="Nome da conta">
+              <input className={inputClass} placeholder="Ex: Conta principal" value={name} onChange={(e) => setName(e.target.value)} />
+            </FormField>
+            <FormField label="Tipo">
+              <select className={inputClass} value={kind} onChange={(e) => setKind(e.target.value as BankAccountKind)}>
+                {Object.entries(KIND_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </FormField>
+          </div>
+          <FormField label="Saldo inicial">
+            <CurrencyInput value={initialBalance} onChange={setInitialBalance} />
+          </FormField>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAdding(false)}
+              className="flex-1 rounded-lg border border-ink-100 py-2 text-sm font-medium text-ink-600 hover:bg-ink-50"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleAdd}
+              disabled={!name.trim()}
+              className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              Salvar
+            </button>
+          </div>
+        </div>
+      )}
     </SettingsCard>
   );
 }

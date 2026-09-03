@@ -14,7 +14,14 @@ import { cardService, type CreditCardInput } from "../services/cardService";
 import { goalService, type FinancialGoalInput } from "../services/goalService";
 import { categoryService, type CategoryInput } from "../services/categoryService";
 import { bankAccountService } from "../services/bankAccountService";
-import { todayISO } from "../utils/date";
+import { invoiceService } from "../services/invoiceService";
+import { installmentService, type CreateInstallmentPlanInput } from "../services/installmentService";
+import { categorizationRuleService } from "../services/categorizationRuleService";
+import { computeAccountBalance, computeTotalBalance } from "../services/balanceService";
+import { generateId } from "../services/localStore";
+import { getCurrentInvoicePeriod, type InvoicePeriod } from "../utils/cardInvoice";
+import { migrateFromLocalStorage } from "../db/migrateFromLocalStorage";
+import { startSyncEngine, subscribeSyncStatus, type AggregateSyncStatus } from "../db/syncService";
 import type {
   AccountBill,
   BankAccount,
@@ -22,36 +29,81 @@ import type {
   CreditCard,
   FinancialGoal,
   GoalContribution,
+  Installment,
+  InstallmentPlan,
+  Invoice,
+  PaymentMethod,
   Transaction,
 } from "../types/finance";
 import type { FinancialInstitution } from "../types/institution";
 
+export interface BillPaymentInput {
+  paymentMethod: PaymentMethod;
+  date: string;
+  amount: number;
+  notes?: string;
+  accountId?: string;
+  cardId?: string;
+  installments?: number;
+}
+
+export interface PayInvoiceInput {
+  cardId: string;
+  period: InvoicePeriod;
+  total: number;
+  accountId: string;
+  date: string;
+}
+
+export interface OperationResult {
+  ok: boolean;
+  reason?: string;
+}
+
 interface FinanceDataValue {
   loading: boolean;
+  syncStatus: AggregateSyncStatus;
   transactions: Transaction[];
   bills: AccountBill[];
   cards: CreditCard[];
   goals: FinancialGoal[];
   categories: Category[];
   bankAccounts: BankAccount[];
+  invoices: Invoice[];
+  installmentPlans: InstallmentPlan[];
+  installments: Installment[];
 
-  addBankAccount: (name: string, kind: BankAccount["kind"], institution?: FinancialInstitution) => Promise<void>;
+  getAccountBalance: (accountId: string) => number;
+  totalBalance: number;
+  getCategoryUsageCount: (categoryId: string) => number;
+
+  addBankAccount: (
+    name: string,
+    kind: BankAccount["kind"],
+    institution?: FinancialInstitution,
+    initialBalance?: number
+  ) => Promise<void>;
+  updateBankAccount: (id: string, patch: Partial<Omit<BankAccount, "id" | "userId">>) => Promise<void>;
   deleteBankAccount: (id: string) => Promise<void>;
 
   addTransaction: (input: TransactionInput) => Promise<void>;
   updateTransaction: (id: string, input: Partial<TransactionInput>) => Promise<void>;
   deleteTransaction: (id: string) => Promise<void>;
   duplicateTransaction: (id: string) => Promise<void>;
+  createInstallmentPurchase: (input: CreateInstallmentPlanInput) => Promise<void>;
 
   addBill: (input: AccountBillInput) => Promise<void>;
   updateBill: (id: string, input: Partial<AccountBillInput>) => Promise<void>;
   deleteBill: (id: string) => Promise<void>;
-  markBillPaid: (id: string) => Promise<void>;
-  markBillUnpaid: (id: string) => Promise<void>;
+  payBill: (id: string, payment: BillPaymentInput) => Promise<OperationResult>;
+  reopenBill: (id: string) => Promise<OperationResult>;
 
   addCard: (input: CreditCardInput) => Promise<void>;
   updateCard: (id: string, input: Partial<CreditCardInput>) => Promise<void>;
   deleteCard: (id: string) => Promise<void>;
+  payInvoice: (input: PayInvoiceInput) => Promise<void>;
+  reopenInvoice: (invoiceId: string) => Promise<void>;
+  deleteInstallmentPlan: (id: string) => Promise<OperationResult>;
 
   addGoal: (input: FinancialGoalInput) => Promise<void>;
   updateGoal: (id: string, input: Partial<FinancialGoalInput>) => Promise<void>;
@@ -60,7 +112,9 @@ interface FinanceDataValue {
 
   addCategory: (input: CategoryInput) => Promise<void>;
   updateCategory: (id: string, input: Partial<CategoryInput>) => Promise<void>;
-  deleteCategory: (id: string) => Promise<void>;
+  deleteCategory: (id: string, reassignToId?: string) => Promise<void>;
+
+  reloadAll: () => Promise<void>;
 }
 
 const FinanceDataContext = createContext<FinanceDataValue | null>(null);
@@ -76,22 +130,29 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
   const userId = currentUser?.uid ?? "";
 
   const [loading, setLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState<AggregateSyncStatus>("idle");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [bills, setBills] = useState<AccountBill[]>([]);
   const [cards, setCards] = useState<CreditCard[]>([]);
   const [goals, setGoals] = useState<FinancialGoal[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlan[]>([]);
+  const [installments, setInstallments] = useState<Installment[]>([]);
 
   const reloadAll = useCallback(async () => {
     if (!userId) return;
-    const [t, b, c, g, cat, acc] = await Promise.all([
+    const [t, b, c, g, cat, acc, inv, plans, insts] = await Promise.all([
       transactionService.list(userId),
       accountService.list(userId),
       cardService.list(userId),
       goalService.list(userId),
       categoryService.list(userId),
       bankAccountService.list(userId),
+      invoiceService.list(userId),
+      installmentService.listPlans(userId),
+      installmentService.listInstallments(userId),
     ]);
     setTransactions(t);
     setBills(b);
@@ -99,6 +160,10 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
     setGoals(g);
     setCategories(cat);
     setBankAccounts(acc);
+    setInvoices(inv);
+    setInstallmentPlans(plans);
+    setInstallments(insts);
+    void categorizationRuleService.seedIfEmpty(userId, cat);
   }, [userId]);
 
   useEffect(() => {
@@ -107,21 +172,47 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       return;
     }
     setLoading(true);
-    reloadAll().finally(() => setLoading(false));
+    migrateFromLocalStorage(userId)
+      .then(reloadAll)
+      .finally(() => setLoading(false));
+
+    const stopEngine = startSyncEngine(userId);
+    const unsubscribe = subscribeSyncStatus(setSyncStatus);
+    return () => {
+      stopEngine();
+      unsubscribe();
+    };
   }, [userId, reloadAll]);
 
   const value = useMemo<FinanceDataValue>(
     () => ({
       loading,
+      syncStatus,
       transactions,
       bills,
       cards,
       goals,
       categories,
       bankAccounts,
+      invoices,
+      installmentPlans,
+      installments,
 
-      async addBankAccount(name, kind, institution) {
-        await bankAccountService.create(userId, name, kind, institution);
+      getAccountBalance(accountId) {
+        const account = bankAccounts.find((a) => a.id === accountId);
+        return account ? computeAccountBalance(account, transactions) : 0;
+      },
+      totalBalance: computeTotalBalance(bankAccounts, transactions),
+      getCategoryUsageCount(categoryId) {
+        return transactions.filter((t) => t.categoryId === categoryId).length;
+      },
+
+      async addBankAccount(name, kind, institution, initialBalance) {
+        await bankAccountService.create(userId, { name, kind, institution, initialBalance });
+        setBankAccounts(await bankAccountService.list(userId));
+      },
+      async updateBankAccount(id, patch) {
+        await bankAccountService.update(userId, id, patch);
         setBankAccounts(await bankAccountService.list(userId));
       },
       async deleteBankAccount(id) {
@@ -145,6 +236,12 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         await transactionService.duplicate(userId, id);
         setTransactions(await transactionService.list(userId));
       },
+      async createInstallmentPurchase(input) {
+        await installmentService.create(userId, input);
+        setTransactions(await transactionService.list(userId));
+        setInstallmentPlans(await installmentService.listPlans(userId));
+        setInstallments(await installmentService.listInstallments(userId));
+      },
 
       async addBill(input) {
         await accountService.create(userId, input);
@@ -156,40 +253,117 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       },
       async deleteBill(id) {
         const bill = bills.find((b) => b.id === id);
-        if (bill?.transactionId) {
-          await transactionService.remove(userId, bill.transactionId);
-          setTransactions(await transactionService.list(userId));
+        if (bill?.installmentPlanId) {
+          await installmentService.deletePlan(userId, bill.installmentPlanId);
+        } else if (bill?.paymentTransactionId) {
+          await transactionService.remove(userId, bill.paymentTransactionId);
         }
         await accountService.remove(userId, id);
         setBills(await accountService.list(userId));
+        setTransactions(await transactionService.list(userId));
+        setInstallmentPlans(await installmentService.listPlans(userId));
+        setInstallments(await installmentService.listInstallments(userId));
       },
-      async markBillPaid(id) {
+
+      async payBill(id, payment) {
         const bill = bills.find((b) => b.id === id);
-        if (!bill) return;
-        // Paying a bill is a real expense: record it as a transaction so it
-        // shows up in Despesas do mês, Relatórios and Gastos por categoria.
-        const transaction = await transactionService.create(userId, {
-          type: "expense",
-          description: bill.description,
-          amount: bill.amount,
-          date: todayISO(),
-          categoryId: bill.categoryId,
-          accountId: bill.accountId ?? bankAccounts[0]?.id ?? "",
-          paymentMethod: bill.paymentMethod ?? "boleto",
-          recurring: false,
-        });
-        await accountService.markPaid(userId, id, transaction.id);
+        if (!bill) return { ok: false, reason: "Conta não encontrada." };
+
+        if (payment.paymentMethod === "credito") {
+          if (!payment.cardId) return { ok: false, reason: "Selecione o cartão de crédito." };
+
+          if (payment.installments && payment.installments > 1) {
+            const plan = await installmentService.create(userId, {
+              sourceType: "bill",
+              sourceId: id,
+              cardId: payment.cardId,
+              description: bill.description,
+              categoryId: bill.categoryId,
+              totalAmount: payment.amount,
+              installmentCount: payment.installments,
+              firstInstallmentDate: payment.date,
+              paymentMethod: "credito",
+            });
+            await accountService.markPaid(userId, id, {
+              paymentMethod: "credito",
+              paidAt: payment.date,
+              paidAmount: payment.amount,
+              paidCardId: payment.cardId,
+              installmentPlanId: plan.id,
+            });
+          } else {
+            const transaction = await transactionService.create(userId, {
+              type: "expense",
+              description: `Pagamento — ${bill.description}`,
+              amount: payment.amount,
+              date: payment.date,
+              categoryId: bill.categoryId,
+              accountId: "",
+              cardId: payment.cardId,
+              paymentMethod: "credito",
+              recurring: false,
+              notes: payment.notes,
+              source: "manual",
+              originType: "bill",
+              originId: id,
+            });
+            await accountService.markPaid(userId, id, {
+              paymentMethod: "credito",
+              paidAt: payment.date,
+              paidAmount: payment.amount,
+              paidCardId: payment.cardId,
+              paymentTransactionId: transaction.id,
+            });
+          }
+        } else {
+          if (!payment.accountId) return { ok: false, reason: "Selecione a conta utilizada." };
+          const transaction = await transactionService.create(userId, {
+            type: "expense",
+            description: `Pagamento — ${bill.description}`,
+            amount: payment.amount,
+            date: payment.date,
+            categoryId: bill.categoryId,
+            accountId: payment.accountId,
+            paymentMethod: payment.paymentMethod,
+            recurring: false,
+            notes: payment.notes,
+            source: "manual",
+            originType: "bill",
+            originId: id,
+          });
+          await accountService.markPaid(userId, id, {
+            paymentMethod: payment.paymentMethod,
+            paidAt: payment.date,
+            paidAmount: payment.amount,
+            paidAccountId: payment.accountId,
+            paymentTransactionId: transaction.id,
+          });
+        }
+
         setBills(await accountService.list(userId));
         setTransactions(await transactionService.list(userId));
+        setInstallmentPlans(await installmentService.listPlans(userId));
+        setInstallments(await installmentService.listInstallments(userId));
+        return { ok: true };
       },
-      async markBillUnpaid(id) {
+
+      async reopenBill(id) {
         const bill = bills.find((b) => b.id === id);
-        if (bill?.transactionId) {
-          await transactionService.remove(userId, bill.transactionId);
-          setTransactions(await transactionService.list(userId));
+        if (!bill) return { ok: false, reason: "Conta não encontrada." };
+
+        if (bill.installmentPlanId) {
+          const result = await installmentService.deletePlan(userId, bill.installmentPlanId);
+          if (!result.ok) return result;
+        } else if (bill.paymentTransactionId) {
+          await transactionService.remove(userId, bill.paymentTransactionId);
         }
+
         await accountService.markUnpaid(userId, id);
         setBills(await accountService.list(userId));
+        setTransactions(await transactionService.list(userId));
+        setInstallmentPlans(await installmentService.listPlans(userId));
+        setInstallments(await installmentService.listInstallments(userId));
+        return { ok: true };
       },
 
       async addCard(input) {
@@ -203,6 +377,56 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       async deleteCard(id) {
         await cardService.remove(userId, id);
         setCards(await cardService.list(userId));
+      },
+
+      async payInvoice({ cardId, period, total, accountId, date }) {
+        const invoiceId = generateId();
+        const transaction = await transactionService.create(userId, {
+          type: "expense",
+          description: "Pagamento de fatura",
+          amount: total,
+          date,
+          categoryId: "",
+          accountId,
+          cardId,
+          paymentMethod: "debito",
+          recurring: false,
+          source: "manual",
+          originType: "credit_card_invoice",
+          originId: invoiceId,
+        });
+        await invoiceService.recordPayment(userId, cardId, period, total, accountId, transaction.id, invoiceId);
+        await installmentService.markInstallmentsPaid(userId, cardId, period.cycleStart, period.cycleEnd);
+
+        setInvoices(await invoiceService.list(userId));
+        setTransactions(await transactionService.list(userId));
+        setInstallments(await installmentService.listInstallments(userId));
+      },
+
+      async reopenInvoice(invoiceId) {
+        const invoice = await invoiceService.get(userId, invoiceId);
+        if (!invoice) return;
+        if (invoice.paymentTransactionId) {
+          await transactionService.remove(userId, invoice.paymentTransactionId);
+        }
+        const card = cards.find((c) => c.id === invoice.cardId);
+        if (card) {
+          const period = getCurrentInvoicePeriod(card, new Date(invoice.periodEnd + "T00:00:00"));
+          await installmentService.markInstallmentsUnpaid(userId, invoice.cardId, period.cycleStart, period.cycleEnd);
+        }
+        await invoiceService.remove(userId, invoiceId);
+
+        setInvoices(await invoiceService.list(userId));
+        setTransactions(await transactionService.list(userId));
+        setInstallments(await installmentService.listInstallments(userId));
+      },
+
+      async deleteInstallmentPlan(id) {
+        const result = await installmentService.deletePlan(userId, id);
+        setTransactions(await transactionService.list(userId));
+        setInstallmentPlans(await installmentService.listPlans(userId));
+        setInstallments(await installmentService.listInstallments(userId));
+        return result;
       },
 
       async addGoal(input) {
@@ -230,12 +454,35 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         await categoryService.update(userId, id, input);
         setCategories(await categoryService.list(userId));
       },
-      async deleteCategory(id) {
+      async deleteCategory(id, reassignToId) {
+        if (reassignToId) {
+          const affected = transactions.filter((t) => t.categoryId === id);
+          for (const t of affected) {
+            await transactionService.update(userId, t.id, { categoryId: reassignToId });
+          }
+        }
         await categoryService.remove(userId, id);
         setCategories(await categoryService.list(userId));
+        setTransactions(await transactionService.list(userId));
       },
+
+      reloadAll,
     }),
-    [loading, transactions, bills, cards, goals, categories, bankAccounts, userId]
+    [
+      loading,
+      syncStatus,
+      transactions,
+      bills,
+      cards,
+      goals,
+      categories,
+      bankAccounts,
+      invoices,
+      installmentPlans,
+      installments,
+      userId,
+      reloadAll,
+    ]
   );
 
   return <FinanceDataContext.Provider value={value}>{children}</FinanceDataContext.Provider>;

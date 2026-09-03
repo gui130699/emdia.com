@@ -12,8 +12,10 @@ export function sumByType(transactions: Transaction[]): PeriodTotals {
   let income = 0;
   let expense = 0;
   for (const t of transactions) {
+    // Internal transfers between the user's own accounts are neither
+    // income nor expense — counting them would inflate both sides.
     if (t.type === "income") income += t.amount;
-    else expense += t.amount;
+    else if (t.type === "expense") expense += t.amount;
   }
   return { income, expense, balance: income - expense };
 }

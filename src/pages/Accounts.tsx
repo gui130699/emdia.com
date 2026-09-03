@@ -9,6 +9,7 @@ import Modal from "../components/ui/Modal";
 import AccountDrawer from "../components/accounts/AccountDrawer";
 import BillCalendar from "../components/accounts/BillCalendar";
 import AccountsTable from "../components/accounts/AccountsTable";
+import BillPaymentModal from "../components/accounts/BillPaymentModal";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
@@ -19,13 +20,15 @@ import type { AccountBill } from "../types/finance";
 export default function Accounts() {
   const { onOpenMenu } = useLayoutContext();
   const navigate = useNavigate();
-  const { bills, categories, markBillPaid, deleteBill } = useFinanceData();
+  const { bills, categories, reopenBill, deleteBill } = useFinanceData();
   const { show } = useToast();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<AccountBill | undefined>();
   const [pendingDelete, setPendingDelete] = useState<AccountBill | null>(null);
+  const [pendingReopen, setPendingReopen] = useState<AccountBill | null>(null);
   const [payModalOpen, setPayModalOpen] = useState(false);
+  const [paying, setPaying] = useState<AccountBill | null>(null);
 
   const currentMonthKey = toMonthKey(new Date());
   const monthBills = useMemo(
@@ -52,9 +55,8 @@ export default function Accounts() {
     setDrawerOpen(true);
   }
 
-  async function handlePay(bill: AccountBill) {
-    await markBillPaid(bill.id);
-    show(`Conta "${bill.description}" marcada como paga.`);
+  function openPayment(bill: AccountBill) {
+    setPaying(bill);
     setPayModalOpen(false);
   }
 
@@ -63,6 +65,17 @@ export default function Accounts() {
     await deleteBill(pendingDelete.id);
     show("Conta excluída.");
     setPendingDelete(null);
+  }
+
+  async function handleReopen() {
+    if (!pendingReopen) return;
+    const result = await reopenBill(pendingReopen.id);
+    if (!result.ok) {
+      show(result.reason ?? "Não foi possível reabrir o pagamento.", "error");
+    } else {
+      show(`Pagamento de "${pendingReopen.description}" revertido.`);
+    }
+    setPendingReopen(null);
   }
 
   return (
@@ -107,7 +120,8 @@ export default function Accounts() {
                 <AccountsTable
                   bills={sortedBills}
                   categoryName={categoryName}
-                  onPay={handlePay}
+                  onPay={openPayment}
+                  onReopen={setPendingReopen}
                   onEdit={(bill) => {
                     setEditing(bill);
                     setDrawerOpen(true);
@@ -163,14 +177,16 @@ export default function Accounts() {
                   <p className="text-sm font-medium text-ink-900">{bill.description}</p>
                   <p className="text-xs text-ink-400">{formatDate(bill.dueDate)} · {formatCurrency(bill.amount)}</p>
                 </div>
-                <button onClick={() => handlePay(bill)} className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700">
-                  Marcar paga
+                <button onClick={() => openPayment(bill)} className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700">
+                  Pagar
                 </button>
               </li>
             ))}
           </ul>
         )}
       </Modal>
+
+      <BillPaymentModal bill={paying} onClose={() => setPaying(null)} />
 
       <ConfirmDialog
         open={!!pendingDelete}
@@ -179,6 +195,15 @@ export default function Accounts() {
         confirmLabel="Excluir"
         onConfirm={handleDelete}
         onCancel={() => setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={!!pendingReopen}
+        title="Reabrir pagamento"
+        message="Este pagamento será desfeito e a movimentação financeira vinculada será revertida. Deseja continuar?"
+        confirmLabel="Reabrir"
+        onConfirm={handleReopen}
+        onCancel={() => setPendingReopen(null)}
       />
     </>
   );

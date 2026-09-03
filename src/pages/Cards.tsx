@@ -1,18 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { Plus, Wallet, CreditCard as CardIcon, Receipt, Calendar, CreditCard } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Plus, Wallet, CreditCard as CardIcon, Receipt, Calendar, CreditCard, Repeat } from "lucide-react";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
 import EmptyState from "../components/ui/EmptyState";
 import ProgressBar from "../components/ui/ProgressBar";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import CategoryChart from "../components/charts/CategoryChart";
 import CardDrawer from "../components/cards/CardDrawer";
 import CardCarousel from "../components/cards/CardCarousel";
 import CardsSummaryTable from "../components/cards/CardsSummaryTable";
+import InvoicePaymentModal from "../components/cards/InvoicePaymentModal";
+import InstallmentPlansSection from "../components/cards/InstallmentPlansSection";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
-import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../stores/ToastContext";
-import { cardService } from "../services/cardService";
 import { getCurrentInvoicePeriod, transactionsInPeriod } from "../utils/cardInvoice";
 import { categoryBreakdown } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
@@ -20,17 +21,13 @@ import { formatDate, formatDateObj } from "../utils/date";
 
 export default function Cards() {
   const { onOpenMenu } = useLayoutContext();
-  const { currentUser } = useAuth();
-  const { cards, transactions, categories } = useFinanceData();
+  const { cards, transactions, categories, invoices, reopenInvoice } = useFinanceData();
   const { show } = useToast();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [paidInvoices, setPaidInvoices] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (currentUser) setPaidInvoices(cardService.getPaidInvoices(currentUser.uid));
-  }, [currentUser]);
+  const [payingInvoice, setPayingInvoice] = useState(false);
+  const [pendingReopenInvoiceId, setPendingReopenInvoiceId] = useState<string | null>(null);
 
   const creditCards = cards.filter((c) => c.type === "credito");
   const selectedCard = cards.find((c) => c.id === selectedCardId) ?? creditCards[0];
@@ -40,10 +37,11 @@ export default function Cards() {
       const period = getCurrentInvoicePeriod(card);
       const purchases = transactionsInPeriod(transactions, card.id, period);
       const total = purchases.reduce((sum, t) => sum + t.amount, 0);
-      const paid = !!paidInvoices[`${card.id}:${period.periodKey}`];
-      return { card, period, purchases, total, paid };
+      const record = invoices.find((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey);
+      const paid = record?.status === "paid";
+      return { card, period, purchases, total: paid ? record!.total : total, paid, invoiceId: record?.id };
     });
-  }, [creditCards, transactions, paidInvoices]);
+  }, [creditCards, transactions, invoices]);
 
   const totalLimit = creditCards.reduce((sum, c) => sum + c.limit, 0);
   const totalUsed = invoicesByCard.reduce((sum, i) => sum + i.total, 0);
@@ -60,11 +58,11 @@ export default function Cards() {
     ? categoryBreakdown(activeInvoice.purchases, categories, "expense")
     : [];
 
-  async function handlePayInvoice() {
-    if (!currentUser || !activeInvoice) return;
-    cardService.markInvoicePaid(currentUser.uid, activeInvoice.card.id, activeInvoice.period.periodKey);
-    setPaidInvoices(cardService.getPaidInvoices(currentUser.uid));
-    show("Fatura marcada como paga.");
+  async function handleReopenInvoice() {
+    if (!pendingReopenInvoiceId) return;
+    await reopenInvoice(pendingReopenInvoiceId);
+    show("Pagamento da fatura revertido.");
+    setPendingReopenInvoiceId(null);
   }
 
   function categoryName(id: string) {
@@ -125,13 +123,22 @@ export default function Cards() {
                     </div>
                     <ProgressBar percent={activeInvoice.card.limit > 0 ? (activeInvoice.total / activeInvoice.card.limit) * 100 : 0} colorClassName="bg-danger-500" />
                   </div>
-                  <button
-                    disabled={activeInvoice.paid}
-                    onClick={handlePayInvoice}
-                    className="mt-4 w-full rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-                  >
-                    {activeInvoice.paid ? "Fatura paga" : "Pagar fatura"}
-                  </button>
+                  {activeInvoice.paid ? (
+                    <button
+                      onClick={() => setPendingReopenInvoiceId(activeInvoice.invoiceId ?? null)}
+                      className="mt-4 w-full rounded-lg border border-ink-100 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50"
+                    >
+                      Fatura paga · Reabrir pagamento
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setPayingInvoice(true)}
+                      disabled={activeInvoice.total <= 0}
+                      className="mt-4 w-full rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      Pagar fatura
+                    </button>
+                  )}
                 </div>
 
                 <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm xl:col-span-2">
@@ -165,6 +172,15 @@ export default function Cards() {
             </div>
 
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
+              <h2 className="flex items-center gap-2 text-base font-bold text-ink-900">
+                <Repeat size={17} /> Parcelamentos
+              </h2>
+              <div className="mt-3">
+                <InstallmentPlansSection />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
               <h2 className="text-base font-bold text-ink-900">Resumo dos cartões</h2>
               <div className="mt-3">
                 <CardsSummaryTable rows={invoicesByCard} />
@@ -175,6 +191,22 @@ export default function Cards() {
       </div>
 
       <CardDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+
+      <InvoicePaymentModal
+        card={payingInvoice ? (activeInvoice?.card ?? null) : null}
+        period={payingInvoice ? (activeInvoice?.period ?? null) : null}
+        total={activeInvoice?.total ?? 0}
+        onClose={() => setPayingInvoice(false)}
+      />
+
+      <ConfirmDialog
+        open={!!pendingReopenInvoiceId}
+        title="Reabrir pagamento da fatura"
+        message="Este pagamento será desfeito e o saldo da conta usada será restaurado. As compras e parcelamentos não serão apagados. Deseja continuar?"
+        confirmLabel="Reabrir"
+        onConfirm={handleReopenInvoice}
+        onCancel={() => setPendingReopenInvoiceId(null)}
+      />
     </>
   );
 }

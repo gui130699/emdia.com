@@ -61,11 +61,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!userId) return;
-    const loaded = settingsService.get(userId);
-    setSettings(loaded);
-    applyTheme(loaded.appearance.theme);
-    applyDensity(loaded.appearance.density);
-    applyAccent(loaded.appearance.accentColor);
+    settingsService.get(userId).then((loaded) => {
+      setSettings(loaded);
+      applyTheme(loaded.appearance.theme);
+      applyDensity(loaded.appearance.density);
+      applyAccent(loaded.appearance.accentColor);
+    });
   }, [userId]);
 
   const value = useMemo<SettingsValue>(

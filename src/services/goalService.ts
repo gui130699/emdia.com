@@ -1,7 +1,8 @@
-import { createLocalCollection, generateId } from "./localStore";
+import { createRepository } from "../db/dexieRepository";
+import { generateId } from "./localStore";
 import type { FinancialGoal, GoalContribution } from "../types/finance";
 
-const store = createLocalCollection<FinancialGoal>("goals");
+const store = createRepository<FinancialGoal>("goals");
 
 export interface FinancialGoalInput {
   name: string;

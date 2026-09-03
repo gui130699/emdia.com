@@ -1,7 +1,8 @@
-import { createLocalCollection, generateId, readValue, writeValue } from "./localStore";
+import { createRepository } from "../db/dexieRepository";
+import { generateId } from "./localStore";
 import type { CreditCard } from "../types/finance";
 
-const store = createLocalCollection<CreditCard>("cards");
+const store = createRepository<CreditCard>("cards");
 
 export interface CreditCardInput {
   name: string;
@@ -18,13 +19,9 @@ export interface CreditCardInput {
   color: string;
 }
 
-/** period key like "2026-09" identifying which invoice cycle was settled */
-function invoicePaymentsKey() {
-  return "cardInvoicePayments";
-}
-
 export const cardService = {
   list: (userId: string) => store.list(userId),
+  get: (userId: string, id: string) => store.get(userId, id),
 
   async create(userId: string, input: CreditCardInput): Promise<CreditCard> {
     const now = new Date().toISOString();
@@ -43,14 +40,4 @@ export const cardService = {
   },
 
   remove: (userId: string, id: string) => store.remove(userId, id),
-
-  getPaidInvoices(userId: string): Record<string, boolean> {
-    return readValue(userId, invoicePaymentsKey(), {} as Record<string, boolean>);
-  },
-
-  markInvoicePaid(userId: string, cardId: string, periodKey: string) {
-    const paid = readValue(userId, invoicePaymentsKey(), {} as Record<string, boolean>);
-    paid[`${cardId}:${periodKey}`] = true;
-    writeValue(userId, invoicePaymentsKey(), paid);
-  },
 };

@@ -1,7 +1,8 @@
-import { createLocalCollection, generateId } from "./localStore";
+import { createRepository } from "../db/dexieRepository";
+import { generateId } from "./localStore";
 import type { AccountBill } from "../types/finance";
 
-const store = createLocalCollection<AccountBill>("bills");
+const store = createRepository<AccountBill>("bills");
 
 export interface AccountBillInput {
   description: string;
@@ -13,6 +14,18 @@ export interface AccountBillInput {
   paymentMethod?: AccountBill["paymentMethod"];
   accountId?: string;
   notes?: string;
+}
+
+export interface BillPaymentInput {
+  paymentMethod: AccountBill["paymentMethod"];
+  paidAt: string;
+  paidAmount: number;
+  paidAccountId?: string;
+  paidCardId?: string;
+  /** Absent when paid via an installment plan (no single transaction to
+   * point at — see installmentPlanId instead). */
+  paymentTransactionId?: string;
+  installmentPlanId?: string;
 }
 
 function computeStatus(dueDate: string, paidAt?: string): AccountBill["status"] {
@@ -32,6 +45,8 @@ export const accountService = {
     }));
   },
 
+  get: (userId: string, id: string) => store.get(userId, id),
+
   async create(userId: string, input: AccountBillInput): Promise<AccountBill> {
     const now = new Date().toISOString();
     const bill: AccountBill = {
@@ -49,11 +64,20 @@ export const accountService = {
     return store.update(userId, id, { ...input, updatedAt: new Date().toISOString() });
   },
 
-  async markPaid(userId: string, id: string, transactionId?: string) {
+  /** Records a full payment: method, account/card used, amount, and the
+   * linked expense transaction. Does NOT itself create the transaction —
+   * the caller (FinanceDataContext) owns that so it can also handle
+   * installments/invoices consistently. */
+  async markPaid(userId: string, id: string, payment: BillPaymentInput) {
     return store.update(userId, id, {
       status: "paid",
-      paidAt: new Date().toISOString(),
-      transactionId,
+      paidAt: payment.paidAt,
+      paidAmount: payment.paidAmount,
+      paidAccountId: payment.paidAccountId,
+      paidCardId: payment.paidCardId,
+      paymentMethod: payment.paymentMethod,
+      paymentTransactionId: payment.paymentTransactionId,
+      installmentPlanId: payment.installmentPlanId,
       updatedAt: new Date().toISOString(),
     });
   },
@@ -64,7 +88,11 @@ export const accountService = {
     return store.update(userId, id, {
       status: computeStatus(bill.dueDate),
       paidAt: undefined,
-      transactionId: undefined,
+      paidAmount: undefined,
+      paidAccountId: undefined,
+      paidCardId: undefined,
+      paymentTransactionId: undefined,
+      installmentPlanId: undefined,
       updatedAt: new Date().toISOString(),
     });
   },

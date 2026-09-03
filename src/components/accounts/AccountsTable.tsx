@@ -14,11 +14,12 @@ interface AccountsTableProps {
   bills: AccountBill[];
   categoryName: (id: string) => string;
   onPay: (bill: AccountBill) => void;
+  onReopen: (bill: AccountBill) => void;
   onEdit: (bill: AccountBill) => void;
   onDelete: (bill: AccountBill) => void;
 }
 
-export default function AccountsTable({ bills, categoryName, onPay, onEdit, onDelete }: AccountsTableProps) {
+export default function AccountsTable({ bills, categoryName, onPay, onReopen, onEdit, onDelete }: AccountsTableProps) {
   return (
     <>
       <div className="hidden overflow-x-auto sm:block">
@@ -52,9 +53,14 @@ export default function AccountsTable({ bills, categoryName, onPay, onEdit, onDe
                           Pagar
                         </button>
                       ) : (
-                        <button onClick={() => onEdit(bill)} className="rounded-lg border border-ink-100 px-2.5 py-1 text-xs font-semibold text-ink-500 hover:bg-ink-50">
-                          Editar
-                        </button>
+                        <>
+                          <button onClick={() => onReopen(bill)} className="rounded-lg border border-ink-100 px-2.5 py-1 text-xs font-semibold text-ink-500 hover:bg-ink-50">
+                            Reabrir
+                          </button>
+                          <button onClick={() => onEdit(bill)} className="rounded-lg px-2.5 py-1 text-xs font-semibold text-ink-400 hover:bg-ink-50">
+                            <Pencil size={13} />
+                          </button>
+                        </>
                       )}
                       <button onClick={() => onDelete(bill)} className="rounded-lg px-2.5 py-1 text-xs font-semibold text-danger-600 hover:bg-danger-500/10">
                         Excluir
@@ -94,13 +100,21 @@ export default function AccountsTable({ bills, categoryName, onPay, onEdit, onDe
                       Pagar
                     </button>
                   ) : (
-                    <button
-                      aria-label="Editar conta"
-                      onClick={() => onEdit(bill)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-400 hover:bg-ink-100"
-                    >
-                      <Pencil size={15} />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => onReopen(bill)}
+                        className="min-h-9 rounded-lg border border-ink-100 px-3 text-xs font-semibold text-ink-500 hover:bg-ink-50"
+                      >
+                        Reabrir
+                      </button>
+                      <button
+                        aria-label="Editar conta"
+                        onClick={() => onEdit(bill)}
+                        className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-400 hover:bg-ink-100"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                    </>
                   )}
                   <button
                     aria-label="Excluir conta"

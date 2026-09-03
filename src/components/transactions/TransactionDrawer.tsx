@@ -1,5 +1,5 @@
 import Drawer from "../ui/Drawer";
-import TransactionForm from "./TransactionForm";
+import TransactionForm, { type TransactionFormSubmitPayload } from "./TransactionForm";
 import { useFinanceData } from "../../stores/FinanceDataContext";
 import { useToast } from "../../stores/ToastContext";
 import type { Transaction } from "../../types/finance";
@@ -14,16 +14,19 @@ interface TransactionDrawerProps {
 const FORM_ID = "transaction-form";
 
 export default function TransactionDrawer({ open, onClose, initial, defaultType }: TransactionDrawerProps) {
-  const { addTransaction, updateTransaction } = useFinanceData();
+  const { addTransaction, updateTransaction, createInstallmentPurchase } = useFinanceData();
   const { show } = useToast();
 
-  async function handleSubmit(input: Parameters<typeof addTransaction>[0]) {
+  async function handleSubmit(payload: TransactionFormSubmitPayload) {
     try {
-      if (initial) {
-        await updateTransaction(initial.id, input);
+      if (payload.kind === "installments") {
+        await createInstallmentPurchase(payload.input);
+        show("Compra parcelada salva com sucesso.");
+      } else if (initial) {
+        await updateTransaction(initial.id, payload.input);
         show("Transação atualizada com sucesso.");
       } else {
-        await addTransaction(input);
+        await addTransaction(payload.input);
         show("Transação salva com sucesso.");
       }
       onClose();
