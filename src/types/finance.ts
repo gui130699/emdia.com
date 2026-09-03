@@ -151,6 +151,9 @@ export interface CreditCard {
   /** Suggested account for paying this card's invoice. */
   accountId?: string;
   color: string;
+  /** When true, `color` overrides the institution's automatic theme —
+   * priority order is: manual color > institution theme > neutral fallback. */
+  useCustomColor?: boolean;
   createdAt: string;
   updatedAt: string;
 }

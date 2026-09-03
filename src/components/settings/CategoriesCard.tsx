@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Tags, Plus, ChevronRight, Trash2 } from "lucide-react";
 import { useFinanceData } from "../../stores/FinanceDataContext";
 import { useToast } from "../../stores/ToastContext";
@@ -13,23 +13,18 @@ import type { Category } from "../../types/finance";
 const COLORS = ["#0f6466", "#059669", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#64748b"];
 
 export default function CategoriesCard() {
-  const { transactions, categories, addCategory, updateCategory, deleteCategory } = useFinanceData();
+  const { categories, addCategory, updateCategory, deleteCategory, getCategoryUsageCount } = useFinanceData();
   const { show } = useToast();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Category | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Category | null>(null);
+  const [reassignToId, setReassignToId] = useState("");
 
   const [name, setName] = useState("");
   const [type, setType] = useState<Category["type"]>("expense");
   const [icon, setIcon] = useState(CATEGORY_ICON_OPTIONS[0]);
   const [color, setColor] = useState(COLORS[0]);
-
-  const usageCount = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const t of transactions) map.set(t.categoryId, (map.get(t.categoryId) ?? 0) + 1);
-    return map;
-  }, [transactions]);
 
   function openCreate() {
     setEditing(null);
@@ -61,12 +56,20 @@ export default function CategoriesCard() {
     setModalOpen(false);
   }
 
+  function openDelete(category: Category) {
+    setReassignToId("");
+    setPendingDelete(category);
+  }
+
   async function handleDelete() {
     if (!pendingDelete) return;
-    await deleteCategory(pendingDelete.id);
+    await deleteCategory(pendingDelete.id, reassignToId || undefined);
     show("Categoria excluída.");
     setPendingDelete(null);
   }
+
+  const pendingUsage = pendingDelete ? getCategoryUsageCount(pendingDelete.id) : 0;
+  const reassignOptions = categories.filter((c) => c.id !== pendingDelete?.id);
 
   return (
     <SettingsCard icon={Tags} title="Categorias" description="Gerencie suas categorias de despesas">
@@ -82,9 +85,9 @@ export default function CategoriesCard() {
                 <span className="text-sm font-medium text-ink-900">{category.name}</span>
               </button>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-ink-400">{usageCount.get(category.id) ?? 0} transações</span>
+                <span className="text-xs text-ink-400">{getCategoryUsageCount(category.id)} transações</span>
                 {!category.isDefault && (
-                  <button aria-label="Excluir categoria" onClick={() => setPendingDelete(category)} className="rounded-lg p-1.5 text-ink-300 hover:bg-danger-500/10 hover:text-danger-600">
+                  <button aria-label="Excluir categoria" onClick={() => openDelete(category)} className="rounded-lg p-1.5 text-ink-300 hover:bg-danger-500/10 hover:text-danger-600">
                     <Trash2 size={14} />
                   </button>
                 )}
@@ -148,14 +151,57 @@ export default function CategoriesCard() {
         </div>
       </Modal>
 
-      <ConfirmDialog
-        open={!!pendingDelete}
-        title="Excluir categoria"
-        message={`Tem certeza que deseja excluir "${pendingDelete?.name}"?`}
-        confirmLabel="Excluir"
-        onConfirm={handleDelete}
-        onCancel={() => setPendingDelete(null)}
-      />
+      {pendingUsage > 0 ? (
+        <Modal
+          open={!!pendingDelete}
+          title="Excluir categoria"
+          onClose={() => setPendingDelete(null)}
+          footer={
+            <>
+              <button onClick={() => setPendingDelete(null)} className="rounded-lg px-4 py-2 text-sm font-medium text-ink-600 hover:bg-ink-50">
+                Cancelar
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={!reassignToId}
+                className="rounded-lg bg-danger-600 px-4 py-2 text-sm font-semibold text-white hover:bg-danger-700 disabled:opacity-50"
+              >
+                Mover e excluir
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">
+              Esta categoria está sendo utilizada por {pendingUsage} transaç{pendingUsage === 1 ? "ão" : "ões"}.
+            </p>
+            <FormField label="Mover transações para" htmlFor="reassign-category">
+              <select
+                id="reassign-category"
+                className={inputClass}
+                value={reassignToId}
+                onChange={(e) => setReassignToId(e.target.value)}
+              >
+                <option value="">Selecione uma categoria</option>
+                {reassignOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          </div>
+        </Modal>
+      ) : (
+        <ConfirmDialog
+          open={!!pendingDelete}
+          title="Excluir categoria"
+          message={`Tem certeza que deseja excluir "${pendingDelete?.name}"?`}
+          confirmLabel="Excluir"
+          onConfirm={handleDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </SettingsCard>
   );
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Wallet, CreditCard as CardIcon, Receipt, Calendar, CreditCard, Repeat } from "lucide-react";
+import { Plus, Wallet, CreditCard as CardIcon, Receipt, Calendar, CreditCard, Repeat, Upload } from "lucide-react";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
 import EmptyState from "../components/ui/EmptyState";
@@ -11,6 +11,7 @@ import CardCarousel from "../components/cards/CardCarousel";
 import CardsSummaryTable from "../components/cards/CardsSummaryTable";
 import InvoicePaymentModal from "../components/cards/InvoicePaymentModal";
 import InstallmentPlansSection from "../components/cards/InstallmentPlansSection";
+import ImportWizard from "../components/imports/ImportWizard";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
@@ -28,6 +29,7 @@ export default function Cards() {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [payingInvoice, setPayingInvoice] = useState(false);
   const [pendingReopenInvoiceId, setPendingReopenInvoiceId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const creditCards = cards.filter((c) => c.type === "credito");
   const selectedCard = cards.find((c) => c.id === selectedCardId) ?? creditCards[0];
@@ -76,12 +78,22 @@ export default function Cards() {
         title="Cartões"
         subtitle="Acompanhe seus cartões e faturas."
         actions={
-          <button
-            onClick={() => setDrawerOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-          >
-            <Plus size={16} /> Adicionar cartão
-          </button>
+          <>
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+            >
+              <Plus size={16} /> Adicionar cartão
+            </button>
+            {creditCards.length > 0 && (
+              <button
+                onClick={() => setImportOpen(true)}
+                className="flex items-center gap-1.5 rounded-lg border border-ink-100 bg-surface px-3.5 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50"
+              >
+                <Upload size={16} /> Importar fatura
+              </button>
+            )}
+          </>
         }
       />
 
@@ -191,6 +203,13 @@ export default function Cards() {
       </div>
 
       <CardDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+
+      <ImportWizard
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        mode="card"
+        fixedCardId={selectedCard?.id}
+      />
 
       <InvoicePaymentModal
         card={payingInvoice ? (activeInvoice?.card ?? null) : null}

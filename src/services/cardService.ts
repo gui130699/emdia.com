@@ -17,6 +17,7 @@ export interface CreditCardInput {
   dueDay: number;
   accountId?: string;
   color: string;
+  useCustomColor?: boolean;
 }
 
 export const cardService = {

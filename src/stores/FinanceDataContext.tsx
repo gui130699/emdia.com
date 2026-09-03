@@ -22,6 +22,7 @@ import { generateId } from "../services/localStore";
 import { getCurrentInvoicePeriod, type InvoicePeriod } from "../utils/cardInvoice";
 import { migrateFromLocalStorage } from "../db/migrateFromLocalStorage";
 import { startSyncEngine, subscribeSyncStatus, type AggregateSyncStatus } from "../db/syncService";
+import { importService } from "../services/importService";
 import type {
   AccountBill,
   BankAccount,
@@ -29,6 +30,7 @@ import type {
   CreditCard,
   FinancialGoal,
   GoalContribution,
+  ImportBatch,
   Installment,
   InstallmentPlan,
   Invoice,
@@ -72,6 +74,7 @@ interface FinanceDataValue {
   invoices: Invoice[];
   installmentPlans: InstallmentPlan[];
   installments: Installment[];
+  importBatches: ImportBatch[];
 
   getAccountBalance: (accountId: string) => number;
   totalBalance: number;
@@ -114,6 +117,8 @@ interface FinanceDataValue {
   updateCategory: (id: string, input: Partial<CategoryInput>) => Promise<void>;
   deleteCategory: (id: string, reassignToId?: string) => Promise<void>;
 
+  undoImportBatch: (id: string) => Promise<OperationResult>;
+
   reloadAll: () => Promise<void>;
 }
 
@@ -140,10 +145,11 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlan[]>([]);
   const [installments, setInstallments] = useState<Installment[]>([]);
+  const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
 
   const reloadAll = useCallback(async () => {
     if (!userId) return;
-    const [t, b, c, g, cat, acc, inv, plans, insts] = await Promise.all([
+    const [t, b, c, g, cat, acc, inv, plans, insts, batches] = await Promise.all([
       transactionService.list(userId),
       accountService.list(userId),
       cardService.list(userId),
@@ -153,6 +159,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       invoiceService.list(userId),
       installmentService.listPlans(userId),
       installmentService.listInstallments(userId),
+      importService.listBatches(userId),
     ]);
     setTransactions(t);
     setBills(b);
@@ -163,6 +170,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
     setInvoices(inv);
     setInstallmentPlans(plans);
     setInstallments(insts);
+    setImportBatches(batches);
     void categorizationRuleService.seedIfEmpty(userId, cat);
   }, [userId]);
 
@@ -197,6 +205,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       invoices,
       installmentPlans,
       installments,
+      importBatches,
 
       getAccountBalance(accountId) {
         const account = bankAccounts.find((a) => a.id === accountId);
@@ -466,6 +475,13 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setTransactions(await transactionService.list(userId));
       },
 
+      async undoImportBatch(id) {
+        const result = await importService.undo(userId, id);
+        setTransactions(await transactionService.list(userId));
+        setImportBatches(await importService.listBatches(userId));
+        return result;
+      },
+
       reloadAll,
     }),
     [
@@ -480,6 +496,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       invoices,
       installmentPlans,
       installments,
+      importBatches,
       userId,
       reloadAll,
     ]

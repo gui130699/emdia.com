@@ -1,8 +1,20 @@
-import { Copy, Pencil, Trash2 } from "lucide-react";
+import { Copy, Pencil, Trash2, DownloadCloud } from "lucide-react";
 import type { BankAccount, Category, Transaction } from "../../types/finance";
 import { formatCurrency } from "../../utils/currency";
 import { formatDate } from "../../utils/date";
 import Badge from "../ui/Badge";
+
+function amountClass(t: Transaction) {
+  if (t.type === "income") return "text-brand-600";
+  if (t.type === "expense") return "text-danger-600";
+  return "text-ink-700";
+}
+
+function amountPrefix(t: Transaction) {
+  if (t.type === "income") return "+ ";
+  if (t.type === "expense") return "- ";
+  return "";
+}
 
 interface TransactionTableProps {
   transactions: Transaction[];
@@ -42,15 +54,22 @@ export default function TransactionTable({
           <tbody>
             {transactions.map((t) => (
               <tr key={t.id} className="border-b border-ink-100 last:border-0 hover:bg-ink-50/60">
-                <td className="py-3 pr-3 font-medium text-ink-900">{t.description}</td>
-                <td className="py-3 pr-3 text-ink-500">{categoryName(t.categoryId)}</td>
-                <td className="py-3 pr-3 text-ink-500">{accountName(t.accountId)}</td>
+                <td className="py-3 pr-3 font-medium text-ink-900">
+                  <span className="flex items-center gap-1.5">
+                    {t.source === "import" && <DownloadCloud size={13} className="shrink-0 text-ink-300" aria-label="Importada" />}
+                    {t.description}
+                  </span>
+                </td>
+                <td className="py-3 pr-3 text-ink-500">{t.type === "transfer" ? "—" : categoryName(t.categoryId)}</td>
+                <td className="py-3 pr-3 text-ink-500">
+                  {t.type === "transfer" ? `${accountName(t.accountId)} → ${accountName(t.destinationAccountId ?? "")}` : accountName(t.accountId)}
+                </td>
                 <td className="py-3 pr-3 text-ink-500">{formatDate(t.date)}</td>
                 <td className="py-3 pr-3">
                   <Badge label="Concluído" tone="success" />
                 </td>
-                <td className={`py-3 pr-3 font-semibold ${t.type === "income" ? "text-brand-600" : "text-danger-600"}`}>
-                  {t.type === "income" ? "+ " : "- "}
+                <td className={`py-3 pr-3 font-semibold ${amountClass(t)}`}>
+                  {amountPrefix(t)}
                   {formatCurrency(t.amount)}
                 </td>
                 <td className="py-3 pl-3">
@@ -76,14 +95,19 @@ export default function TransactionTable({
         {transactions.map((t) => (
           <li key={t.id} className="rounded-xl border border-ink-100 p-4">
             <div className="flex items-start justify-between">
-              <div>
-                <p className="font-medium text-ink-900">{t.description}</p>
-                <p className="text-xs text-ink-400">
-                  {categoryName(t.categoryId)} · {accountName(t.accountId)}
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 font-medium text-ink-900">
+                  {t.source === "import" && <DownloadCloud size={12} className="shrink-0 text-ink-300" aria-label="Importada" />}
+                  <span className="truncate">{t.description}</span>
+                </p>
+                <p className="truncate text-xs text-ink-400">
+                  {t.type === "transfer"
+                    ? `${accountName(t.accountId)} → ${accountName(t.destinationAccountId ?? "")}`
+                    : `${categoryName(t.categoryId)} · ${accountName(t.accountId)}`}
                 </p>
               </div>
-              <span className={`font-semibold ${t.type === "income" ? "text-brand-600" : "text-danger-600"}`}>
-                {t.type === "income" ? "+ " : "- "}
+              <span className={`shrink-0 font-semibold ${amountClass(t)}`}>
+                {amountPrefix(t)}
                 {formatCurrency(t.amount)}
               </span>
             </div>

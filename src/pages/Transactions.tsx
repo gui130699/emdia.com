@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, FileDown, ArrowDownCircle, ArrowUpCircle, Wallet2, Receipt } from "lucide-react";
+import { Plus, FileDown, ArrowDownCircle, ArrowUpCircle, Wallet2, Receipt, Upload } from "lucide-react";
 import { startOfMonth, endOfMonth, parseISO } from "date-fns";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
@@ -9,6 +9,7 @@ import ConfirmDialog from "../components/ui/ConfirmDialog";
 import CashFlowChart from "../components/charts/CashFlowChart";
 import TransactionTable from "../components/transactions/TransactionTable";
 import TransactionDrawer from "../components/transactions/TransactionDrawer";
+import ImportWizard from "../components/imports/ImportWizard";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
@@ -34,11 +35,13 @@ export default function Transactions() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [accountFilter, setAccountFilter] = useState("");
   const [paymentFilter, setPaymentFilter] = useState("");
+  const [originFilter, setOriginFilter] = useState<"all" | "manual" | "import">("all");
   const [search, setSearch] = useState("");
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | undefined>();
   const [pendingDelete, setPendingDelete] = useState<Transaction | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const periodTransactions = useMemo(
     () => filterByPeriod(transactions, parseISO(start), parseISO(end)),
@@ -51,10 +54,11 @@ export default function Transactions() {
       if (categoryFilter && t.categoryId !== categoryFilter) return false;
       if (accountFilter && t.accountId !== accountFilter) return false;
       if (paymentFilter && t.paymentMethod !== paymentFilter) return false;
+      if (originFilter !== "all" && (t.source ?? "manual") !== originFilter) return false;
       if (search && !t.description.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [periodTransactions, typeFilter, categoryFilter, accountFilter, paymentFilter, search]);
+  }, [periodTransactions, typeFilter, categoryFilter, accountFilter, paymentFilter, originFilter, search]);
 
   const totals = sumByType(filtered);
 
@@ -144,6 +148,9 @@ export default function Transactions() {
           <>
             <button onClick={openNew} className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Plus size={16} /> Nova transação
+            </button>
+            <button onClick={() => setImportOpen(true)} className="flex items-center gap-1.5 rounded-lg border border-ink-100 bg-surface px-3.5 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50">
+              <Upload size={16} /> Importar extrato
             </button>
             <button onClick={handleExportCsv} className="flex items-center gap-1.5 rounded-lg border border-ink-100 bg-surface px-3.5 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50">
               <FileDown size={16} /> CSV
@@ -237,6 +244,11 @@ export default function Transactions() {
               <option key={value} value={value}>{label}</option>
             ))}
           </select>
+          <select value={originFilter} onChange={(e) => setOriginFilter(e.target.value as typeof originFilter)} className="rounded-lg border border-ink-100 px-2.5 py-2 text-sm">
+            <option value="all">Todas origens</option>
+            <option value="manual">Manuais</option>
+            <option value="import">Importadas</option>
+          </select>
           <div className="ml-auto">
             <SearchInput value={search} onChange={setSearch} placeholder="Buscar transação..." />
           </div>
@@ -285,6 +297,8 @@ export default function Transactions() {
       </div>
 
       <TransactionDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} initial={editing} />
+
+      <ImportWizard open={importOpen} onClose={() => setImportOpen(false)} mode="account" />
 
       <ConfirmDialog
         open={!!pendingDelete}

@@ -6,6 +6,8 @@ import {
   Target,
   BarChart3,
   Settings,
+  History,
+  HelpCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -22,5 +24,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Cartões", path: "/cartoes", icon: CreditCard },
   { label: "Metas", path: "/metas", icon: Target },
   { label: "Relatórios", path: "/relatorios", icon: BarChart3 },
+  { label: "Importações", path: "/importacoes", icon: History },
+  { label: "Ajuda", path: "/ajuda", icon: HelpCircle },
   { label: "Configurações", path: "/configuracoes", icon: Settings },
 ];

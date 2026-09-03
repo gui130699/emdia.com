@@ -8,7 +8,7 @@ const MAIN_ITEMS = [
   { label: "Metas", path: "/metas", icon: Target },
 ];
 
-const MORE_PATHS = ["/cartoes", "/relatorios", "/configuracoes"];
+const MORE_PATHS = ["/cartoes", "/relatorios", "/importacoes", "/ajuda", "/configuracoes"];
 
 interface BottomNavProps {
   onOpenMore: () => void;

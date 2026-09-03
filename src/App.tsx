@@ -14,6 +14,8 @@ const Cards = lazy(() => import("./pages/Cards"));
 const Goals = lazy(() => import("./pages/Goals"));
 const Reports = lazy(() => import("./pages/Reports"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const ImportHistory = lazy(() => import("./pages/ImportHistory"));
+const Help = lazy(() => import("./pages/Help"));
 
 function PageFallback() {
   return (
@@ -92,6 +94,22 @@ export default function App() {
                 element={
                   <Suspense fallback={<PageFallback />}>
                     <SettingsPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/importacoes"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <ImportHistory />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/ajuda"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <Help />
                   </Suspense>
                 }
               />

@@ -1,26 +1,42 @@
 import { Wifi } from "lucide-react";
+import BankLogo from "../institutions/BankLogo";
+import { getCardTheme, themeFromCustomColor } from "../../constants/institutionCardThemes";
 import type { CreditCard } from "../../types/finance";
-import { CheckBadgeIcon } from "../icons";
 
 export default function CreditCardVisual({ card }: { card: CreditCard }) {
+  const theme = card.useCustomColor && card.color
+    ? themeFromCustomColor(card.color)
+    : getCardTheme(card.institutionCode, card.institution);
+
   return (
     <div
-      className="flex h-44 w-full max-w-xs flex-col justify-between rounded-2xl p-5 text-white shadow-lg"
-      style={{ background: `linear-gradient(135deg, ${card.color}, #06211f)` }}
+      className="flex h-44 w-full max-w-xs flex-col justify-between rounded-2xl p-5 shadow-lg"
+      style={{ background: theme.gradient, color: theme.textColor }}
     >
-      <div className="flex items-start justify-between">
-        <span className="flex items-center gap-1.5 text-sm font-bold">
-          <CheckBadgeIcon size={18} /> EM DIA
-        </span>
-        <span className="rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-semibold capitalize">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+            style={{ backgroundColor: theme.logoTreatment === "light" ? "rgba(255,255,255,0.9)" : "transparent" }}
+          >
+            <BankLogo name={card.institution} code={card.institutionCode} logoUrl={card.institutionLogoUrl} size={22} />
+          </span>
+          <span className="truncate text-xs font-semibold uppercase tracking-wide" style={{ color: theme.mutedTextColor }}>
+            {card.institution}
+          </span>
+        </div>
+        <span
+          className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize"
+          style={{ backgroundColor: theme.badgeBgColor, color: theme.badgeTextColor }}
+        >
           {card.type === "credito" ? "Crédito" : "Débito"}
         </span>
       </div>
 
       <div>
-        <div className="flex items-center gap-2 text-white/70">
-          <span className="h-6 w-8 rounded bg-white/20" />
-          <Wifi size={16} />
+        <div className="flex items-center gap-2" style={{ color: theme.mutedTextColor }}>
+          <span className="h-6 w-8 rounded" style={{ backgroundColor: theme.chipColor }} />
+          <Wifi size={16} aria-label="Aproximação" />
         </div>
         <p className="mt-2 font-mono text-lg tracking-widest">
           •••• •••• •••• {card.lastFourDigits}
@@ -29,10 +45,9 @@ export default function CreditCardVisual({ card }: { card: CreditCard }) {
 
       <div className="flex items-end justify-between text-xs">
         <div>
-          <p className="text-white/60">Titular</p>
-          <p className="font-semibold uppercase">{card.institution}</p>
+          <p style={{ color: theme.mutedTextColor }}>Cartão</p>
+          <p className="font-semibold">{card.name}</p>
         </div>
-        <span className="text-sm font-bold italic">{card.name}</span>
       </div>
     </div>
   );

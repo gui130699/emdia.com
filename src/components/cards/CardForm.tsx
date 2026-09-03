@@ -25,6 +25,7 @@ const schema = z.object({
   dueDay: z.number().min(1).max(31),
   accountId: z.string().optional(),
   color: z.string(),
+  useCustomColor: z.boolean(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -60,10 +61,12 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
       dueDay: 15,
       accountId: bankAccounts[0]?.id ?? "",
       color: COLORS[0],
+      useCustomColor: false,
     },
   });
 
   const color = watch("color");
+  const useCustomColor = watch("useCustomColor");
 
   return (
     <form
@@ -138,19 +141,29 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
         </select>
       </FormField>
 
-      <FormField label="Cor do cartão">
-        <div className="flex gap-2">
-          {COLORS.map((c) => (
-            <label key={c}>
-              <input type="radio" value={c} className="sr-only" {...register("color")} />
-              <span
-                className={`block h-8 w-8 cursor-pointer rounded-full ring-offset-2 ${color === c ? "ring-2 ring-ink-700" : ""}`}
-                style={{ backgroundColor: c }}
-              />
-            </label>
-          ))}
-        </div>
-      </FormField>
+      <label className="flex items-center gap-2 text-sm font-medium text-ink-700">
+        <input type="checkbox" className="h-4 w-4 rounded border-ink-300 text-brand-600" {...register("useCustomColor")} />
+        Usar cor personalizada
+      </label>
+      <p className="-mt-2 text-xs text-ink-400">
+        Sem isso, o cartão usa automaticamente as cores da instituição escolhida.
+      </p>
+
+      {useCustomColor && (
+        <FormField label="Cor do cartão">
+          <div className="flex gap-2">
+            {COLORS.map((c) => (
+              <label key={c}>
+                <input type="radio" value={c} className="sr-only" {...register("color")} />
+                <span
+                  className={`block h-8 w-8 cursor-pointer rounded-full ring-offset-2 ${color === c ? "ring-2 ring-ink-700" : ""}`}
+                  style={{ backgroundColor: c }}
+                />
+              </label>
+            ))}
+          </div>
+        </FormField>
+      )}
     </form>
   );
 }
