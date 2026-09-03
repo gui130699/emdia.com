@@ -10,6 +10,7 @@ const STATUS_CONFIG: Record<Invoice["status"], { label: string; tone: "success" 
   open: { label: "Aberta", tone: "neutral" },
   closed: { label: "Fechada", tone: "warning" },
   paid: { label: "Paga", tone: "success" },
+  partial: { label: "Paga parcialmente", tone: "warning" },
   overdue: { label: "Atrasada", tone: "danger" },
 };
 

@@ -50,7 +50,18 @@ export default function Cards() {
       const total = purchases.reduce((sum, t) => sum + signedCardAmount(t), 0);
       const record = invoices.find((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey);
       const paid = record?.status === "paid";
-      return { card, period, purchases, total: paid ? record!.total : total, paid, invoiceId: record?.id };
+      const partial = record?.status === "partial";
+      return {
+        card,
+        period,
+        purchases,
+        total: paid || partial ? record!.total : total,
+        paid,
+        partial,
+        paidAmount: record?.paidAmount,
+        remainingAmount: record?.remainingAmount,
+        invoiceId: record?.id,
+      };
     });
   }, [creditCards, transactions, invoices]);
 
@@ -200,6 +211,25 @@ export default function Cards() {
                     >
                       Fatura paga · Reabrir pagamento
                     </button>
+                  ) : activeInvoice.partial ? (
+                    <>
+                      <p className="mt-3 text-xs text-warning-600">
+                        Pago parcialmente: {formatCurrency(activeInvoice.paidAmount ?? 0)} · Restante:{" "}
+                        {formatCurrency(activeInvoice.remainingAmount ?? 0)}
+                      </p>
+                      <button
+                        onClick={() => setPayingInvoice(true)}
+                        className="mt-2 w-full rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+                      >
+                        Pagar restante
+                      </button>
+                      <button
+                        onClick={() => setPendingReopenInvoiceId(activeInvoice.invoiceId ?? null)}
+                        className="mt-2 w-full rounded-lg border border-ink-100 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50"
+                      >
+                        Desfazer pagamentos
+                      </button>
+                    </>
                   ) : (
                     <button
                       onClick={() => setPayingInvoice(true)}
@@ -307,6 +337,7 @@ export default function Cards() {
         card={payingInvoice ? (activeInvoice?.card ?? null) : null}
         period={payingInvoice ? (activeInvoice?.period ?? null) : null}
         total={activeInvoice?.total ?? 0}
+        remainingAmount={activeInvoice?.partial ? activeInvoice.remainingAmount : undefined}
         onClose={() => setPayingInvoice(false)}
       />
 

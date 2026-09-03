@@ -56,7 +56,11 @@ export interface BillPaymentInput {
 export interface PayInvoiceInput {
   cardId: string;
   period: InvoicePeriod;
-  total: number;
+  /** The real invoice total, independent of how much is being paid now. */
+  invoiceTotal: number;
+  /** What's actually being paid in this transaction — can be less than
+   * invoiceTotal for a partial payment. */
+  amountPaid: number;
   accountId: string;
   date: string;
 }
@@ -511,12 +515,13 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setCards(await cardService.list(userId));
       },
 
-      async payInvoice({ cardId, period, total, accountId, date }) {
-        const invoiceId = generateId();
+      async payInvoice({ cardId, period, invoiceTotal, amountPaid, accountId, date }) {
+        const existing = await invoiceService.findByPeriod(userId, cardId, period.periodKey);
+        const invoiceId = existing?.id ?? generateId();
         const transaction = await transactionService.create(userId, {
           type: "expense",
-          description: "Pagamento de fatura",
-          amount: total,
+          description: amountPaid < invoiceTotal ? "Pagamento parcial de fatura" : "Pagamento de fatura",
+          amount: amountPaid,
           date,
           categoryId: "",
           accountId,
@@ -527,8 +532,21 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
           originType: "credit_card_invoice",
           originId: invoiceId,
         });
-        await invoiceService.recordPayment(userId, cardId, period, total, accountId, transaction.id, invoiceId);
-        await installmentService.markInstallmentsPaid(userId, cardId, period.cycleStart, period.cycleEnd);
+        const invoice = await invoiceService.recordPayment(
+          userId,
+          cardId,
+          period,
+          invoiceTotal,
+          amountPaid,
+          accountId,
+          transaction.id,
+          invoiceId
+        );
+        // A partial payment doesn't settle any specific parcela — only mark
+        // installments paid once the invoice is fully covered.
+        if (invoice.status === "paid") {
+          await installmentService.markInstallmentsPaid(userId, cardId, period.cycleStart, period.cycleEnd);
+        }
 
         setInvoices(await invoiceService.list(userId));
         setTransactions(await transactionService.list(userId));
@@ -538,8 +556,14 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       async reopenInvoice(invoiceId) {
         const invoice = await invoiceService.get(userId, invoiceId);
         if (!invoice) return;
-        if (invoice.paymentTransactionId) {
-          await transactionService.remove(userId, invoice.paymentTransactionId);
+        // A partial payment leaves more than one payment transaction linked
+        // to the same invoice (originId) — remove all of them, not just the
+        // most recent one referenced by paymentTransactionId.
+        const paymentTxs = transactions.filter(
+          (t) => t.originType === "credit_card_invoice" && t.originId === invoice.id
+        );
+        for (const t of paymentTxs) {
+          await transactionService.remove(userId, t.id);
         }
         const card = cards.find((c) => c.id === invoice.cardId);
         if (card) {

@@ -14,20 +14,28 @@ export const invoiceService = {
     return all.find((inv) => inv.cardId === cardId && inv.periodKey === periodKey);
   },
 
-  /** Persists a paid invoice record for a cycle that was previously only
-   * computed on the fly. Only paid/settled cycles need a real document —
-   * open/overdue cycles keep being derived from transactions dynamically. */
+  /** Persists a paid (or partially paid) invoice record for a cycle that
+   * was previously only computed on the fly. `total` is always the real
+   * invoice total, independent of how much is actually being paid now —
+   * paying less than that leaves the difference in `remainingAmount` and
+   * the cycle as "partial" instead of silently treating it as settled,
+   * which would otherwise erase the remaining debt from tracking. A second
+   * partial payment on the same cycle accumulates onto the first instead
+   * of overwriting it. */
   async recordPayment(
     userId: string,
     cardId: string,
     period: InvoicePeriod,
     total: number,
+    paidAmount: number,
     paidAccountId: string,
     paymentTransactionId: string,
     id?: string
   ): Promise<Invoice> {
     const now = new Date().toISOString();
     const existing = await this.findByPeriod(userId, cardId, period.periodKey);
+    const totalPaid = (existing?.paidAmount ?? 0) + paidAmount;
+    const remainingAmount = Math.max(0, total - totalPaid);
     const invoice: Invoice = {
       id: existing?.id ?? id ?? generateId(),
       userId,
@@ -38,9 +46,10 @@ export const invoiceService = {
       closingDate: period.cycleEnd.toISOString().slice(0, 10),
       dueDate: period.dueDate.toISOString().slice(0, 10),
       total,
-      status: "paid",
+      remainingAmount,
+      status: remainingAmount <= 0 ? "paid" : "partial",
       paidAt: now,
-      paidAmount: total,
+      paidAmount: totalPaid,
       paidAccountId,
       paymentTransactionId,
       createdAt: existing?.createdAt ?? now,

@@ -229,7 +229,7 @@ export interface CreditCard {
   updatedAt: string;
 }
 
-export type InvoiceStatus = "open" | "closed" | "paid" | "overdue";
+export type InvoiceStatus = "open" | "closed" | "paid" | "partial" | "overdue";
 
 export interface Invoice {
   id: string;

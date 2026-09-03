@@ -762,6 +762,7 @@ export const importService = {
           row.suggestion.invoiceCardId,
           row.suggestion.invoicePeriod,
           row.amount,
+          row.amount,
           target.accountId ?? "",
           transaction.id,
           invoiceId
