@@ -44,7 +44,7 @@ export default function Dashboard() {
   const { onOpenMenu } = useLayoutContext();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const { transactions, bills, goals, categories, loading } = useFinanceData();
+  const { transactions, bills, goals, categories, loading, totalBalance } = useFinanceData();
 
   const [monthsBack, setMonthsBack] = useState(6);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -67,7 +67,6 @@ export default function Dashboard() {
 
   const thisMonthTotals = sumByType(thisMonthTx);
   const lastMonthTotals = sumByType(lastMonthTx);
-  const totalBalance = sumByType(transactions).balance;
 
   const incomeGrowth = growthPercent(thisMonthTotals.income, lastMonthTotals.income);
   const expenseGrowth = growthPercent(thisMonthTotals.expense, lastMonthTotals.expense);

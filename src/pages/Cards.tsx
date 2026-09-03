@@ -17,7 +17,7 @@ import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
 import { getCurrentInvoicePeriod, transactionsInPeriod, signedCardAmount } from "../utils/cardInvoice";
-import { categoryBreakdown } from "../services/reportService";
+import { cardConsumptionBreakdown } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
 import { formatDate, formatDateObj } from "../utils/date";
 import type { CreditCard as CreditCardType } from "../types/finance";
@@ -66,7 +66,7 @@ export default function Cards() {
   );
 
   const categoryData = activeInvoice
-    ? categoryBreakdown(activeInvoice.purchases, categories, "expense")
+    ? cardConsumptionBreakdown(activeInvoice.purchases, categories, activeInvoice.card.id)
     : [];
 
   async function handleReopenInvoice() {
@@ -228,15 +228,20 @@ export default function Cards() {
                 <EmptyState icon={Receipt} title="Nenhuma compra no cartão ainda" />
               ) : (
                 <ul className="mt-3 divide-y divide-ink-100">
-                  {recentPurchases.map((t) => (
-                    <li key={t.id} className="flex items-center justify-between py-2.5 text-sm">
-                      <div>
-                        <p className="font-medium text-ink-900">{t.description}</p>
-                        <p className="text-xs text-ink-400">{categoryName(t.categoryId)} · {formatDate(t.date)}</p>
-                      </div>
-                      <span className="font-semibold text-danger-600">- {formatCurrency(t.amount)}</span>
-                    </li>
-                  ))}
+                  {recentPurchases.map((t) => {
+                    const isCredit = t.cardEntryType === "refund" || t.cardEntryType === "credit" || t.cardEntryType === "credit_card_payment";
+                    return (
+                      <li key={t.id} className="flex items-center justify-between py-2.5 text-sm">
+                        <div>
+                          <p className="font-medium text-ink-900">{t.description}</p>
+                          <p className="text-xs text-ink-400">{categoryName(t.categoryId)} · {formatDate(t.date)}</p>
+                        </div>
+                        <span className={`font-semibold ${isCredit ? "text-success-600" : "text-danger-600"}`}>
+                          {isCredit ? "+ " : "- "}{formatCurrency(t.amount)}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

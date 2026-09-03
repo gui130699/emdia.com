@@ -13,7 +13,7 @@ import ImportWizard from "../components/imports/ImportWizard";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
-import { filterByPeriod, sumByType } from "../services/reportService";
+import { filterByPeriod, sumByType, isCashFlowTransaction } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
 import { formatDateShort, toDateInputValue } from "../utils/date";
 import { PAYMENT_METHOD_LABELS } from "../constants/labels";
@@ -65,6 +65,7 @@ export default function Transactions() {
   const cashFlowData = useMemo(() => {
     const byDate = new Map<string, { income: number; expense: number }>();
     for (const t of filtered) {
+      if (!isCashFlowTransaction(t)) continue;
       const entry = byDate.get(t.date) ?? { income: 0, expense: 0 };
       if (t.type === "income") entry.income += t.amount;
       else entry.expense += t.amount;

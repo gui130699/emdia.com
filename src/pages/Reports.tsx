@@ -1,5 +1,20 @@
 import { useMemo, useState } from "react";
-import { TrendingUp, TrendingDown, PiggyBank, LineChart, FileDown, Lightbulb, Home, Sparkles } from "lucide-react";
+import {
+  TrendingUp,
+  TrendingDown,
+  PiggyBank,
+  LineChart,
+  FileDown,
+  Lightbulb,
+  Home,
+  Sparkles,
+  CreditCard,
+  Receipt,
+  ArrowLeftRight,
+  AlertTriangle,
+  Undo2,
+  History,
+} from "lucide-react";
 import {
   startOfMonth,
   endOfMonth,
@@ -20,6 +35,10 @@ import {
   sumByType,
   growthPercent,
   categoryBreakdown,
+  cardConsumptionBreakdown,
+  cardStatementSummary,
+  invoicePaymentsTotal,
+  transfersTotal,
   monthlyEvolution,
   generateInsights,
 } from "../services/reportService";
@@ -89,6 +108,12 @@ export default function Reports() {
   );
 
   const insights = useMemo(() => generateInsights(current, previous, categories), [current, previous, categories]);
+
+  const cardConsumption = useMemo(() => cardConsumptionBreakdown(current, categories), [current, categories]);
+  const cardConsumptionTotal = useMemo(() => cardConsumption.reduce((sum, i) => sum + i.value, 0), [cardConsumption]);
+  const statementSummary = useMemo(() => cardStatementSummary(current), [current]);
+  const invoicePayments = useMemo(() => invoicePaymentsTotal(current), [current]);
+  const transfers = useMemo(() => transfersTotal(current), [current]);
 
   function categoryName(id: string) {
     return categories.find((c) => c.id === id)?.name ?? "Outros";
@@ -215,6 +240,77 @@ export default function Reports() {
               <CashFlowChart data={cashFlowData} />
             )}
           </div>
+        </div>
+
+        <div>
+          <h2 className="mb-3 text-base font-bold text-ink-900">Cartões e outras movimentações</h2>
+          <p className="mb-3 -mt-2 text-xs text-ink-400">
+            Consumo no cartão, pagamentos de fatura e encargos não entram no cálculo de receitas/despesas acima — só a
+            fatura paga afeta seu saldo em conta.
+          </p>
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+            <SummaryCard
+              icon={CreditCard}
+              iconClassName="bg-brand-50 text-brand-600"
+              label="Consumo no cartão"
+              value={formatCurrency(cardConsumptionTotal)}
+              hint="Compras, parcelas e saques no período"
+            />
+            <SummaryCard
+              icon={Receipt}
+              iconClassName="bg-info-500/10 text-info-600"
+              label="Pagamentos de fatura"
+              value={formatCurrency(invoicePayments)}
+              hint="Já contabilizado nas despesas acima"
+            />
+            <SummaryCard
+              icon={ArrowLeftRight}
+              iconClassName="bg-ink-100 text-ink-600"
+              label="Transferências"
+              value={formatCurrency(transfers)}
+              hint="Entre suas próprias contas"
+            />
+            <SummaryCard
+              icon={AlertTriangle}
+              iconClassName="bg-danger-500/10 text-danger-600"
+              label="Encargos financeiros"
+              value={formatCurrency(statementSummary.charges)}
+              hint="Juros, IOF e multa por atraso"
+            />
+            <SummaryCard
+              icon={Undo2}
+              iconClassName="bg-success-50 text-success-600"
+              label="Estornos"
+              value={formatCurrency(statementSummary.refunds)}
+              hint="Créditos e estornos recebidos na fatura"
+            />
+            <SummaryCard
+              icon={History}
+              iconClassName="bg-warning-500/10 text-warning-600"
+              label="Saldo anterior"
+              value={formatCurrency(statementSummary.previousBalance)}
+              hint="Transportado de fatura(s) anterior(es)"
+            />
+          </div>
+
+          {cardConsumption.length > 0 && (
+            <div className="mt-4 rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
+              <h3 className="text-sm font-bold text-ink-900">Consumo no cartão por categoria</h3>
+              <ul className="mt-4 space-y-3">
+                {cardConsumption.map((item) => (
+                  <li key={item.categoryId}>
+                    <div className="mb-1 flex justify-between text-sm">
+                      <span className="text-ink-700">{item.name}</span>
+                      <span className="font-semibold text-ink-900">{formatCurrency(item.value)} · {item.percent.toFixed(0)}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-ink-100">
+                      <div className="h-full rounded-full bg-brand-500" style={{ width: `${item.percent}%` }} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">

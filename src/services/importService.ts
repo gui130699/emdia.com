@@ -52,6 +52,16 @@ export function classifyCardEntry(description: string, isCreditEntry: boolean, h
   return "purchase";
 }
 
+/** A card statement line that reduces what's owed (refund, credit, a
+ * payment received) should read as money coming back, not another charge —
+ * everything else on a card statement is a debt-increasing entry. */
+export function cardEntryTransactionType(cardEntryType: CardEntryType | undefined): "income" | "expense" {
+  if (cardEntryType === "refund" || cardEntryType === "credit" || cardEntryType === "credit_card_payment") {
+    return "income";
+  }
+  return "expense";
+}
+
 function confidenceLevelFor(score: number): ConfidenceLevel {
   if (score >= 90) return "high";
   if (score >= 70) return "medium";
@@ -740,7 +750,7 @@ export const importService = {
       if (row.status === "needsReview") reviewRecords++;
 
       await transactionService.create(userId, {
-        type: target.cardId ? "expense" : row.type,
+        type: target.cardId ? cardEntryTransactionType(row.cardEntryType) : row.type,
         description: row.description,
         amount: row.amount,
         date: row.date,
