@@ -46,6 +46,23 @@ export default function Cards() {
   const invoicesByCard = useMemo(() => {
     return creditCards.map((card) => {
       const period = getCurrentInvoicePeriod(card);
+      if (!period) {
+        // Closing/due day not informed yet (typically a card created from a
+        // statement import) — there's no cycle to compute a "fatura atual"
+        // from, so say so instead of pretending a R$0 invoice.
+        return {
+          card,
+          period: undefined,
+          purchases: [],
+          total: 0,
+          paid: false,
+          partial: false,
+          paidAmount: undefined,
+          remainingAmount: undefined,
+          invoiceId: undefined,
+          needsSetup: true,
+        };
+      }
       const purchases = transactionsInPeriod(transactions, card.id, period);
       const total = purchases.reduce((sum, t) => sum + signedCardAmount(t), 0);
       const record = invoices.find((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey);
@@ -61,13 +78,18 @@ export default function Cards() {
         paidAmount: record?.paidAmount,
         remainingAmount: record?.remainingAmount,
         invoiceId: record?.id,
+        needsSetup: false,
       };
     });
   }, [creditCards, transactions, invoices]);
 
-  const totalLimit = creditCards.reduce((sum, c) => sum + c.limit, 0);
+  // A card with no informed limit can't contribute a meaningful number to
+  // these totals — treating "unknown" as 0 would silently understate the
+  // real limit and (once purchases exist) show a false negative "disponível".
+  const hasUnknownLimit = creditCards.some((c) => c.limit == null);
+  const totalLimit = creditCards.reduce((sum, c) => sum + (c.limit ?? 0), 0);
   const totalUsed = invoicesByCard.reduce((sum, i) => sum + i.total, 0);
-  const totalAvailable = totalLimit - totalUsed;
+  const totalAvailable = hasUnknownLimit ? undefined : totalLimit - totalUsed;
 
   const activeInvoice = invoicesByCard.find((i) => i.card.id === selectedCard?.id);
 
@@ -151,18 +173,28 @@ export default function Cards() {
 
       <div className="space-y-6 px-4 py-6 sm:px-6 lg:px-8">
         <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-          <SummaryCard icon={Wallet} label="Limite total" value={formatCurrency(totalLimit)} />
-          <SummaryCard icon={CardIcon} iconClassName="bg-brand-50 text-brand-600" label="Disponível" value={formatCurrency(totalAvailable)} />
+          <SummaryCard
+            icon={Wallet}
+            label="Limite total"
+            value={hasUnknownLimit ? "Não informado" : formatCurrency(totalLimit)}
+            hint={hasUnknownLimit ? "Um ou mais cartões sem limite informado" : undefined}
+          />
+          <SummaryCard
+            icon={CardIcon}
+            iconClassName="bg-brand-50 text-brand-600"
+            label="Disponível"
+            value={totalAvailable === undefined ? "Não disponível" : formatCurrency(totalAvailable)}
+          />
           <SummaryCard
             icon={Receipt}
             iconClassName="bg-danger-500/10 text-danger-600"
             label="Fatura atual"
-            value={activeInvoice ? formatCurrency(activeInvoice.total) : formatCurrency(0)}
+            value={activeInvoice?.needsSetup ? "Não calculada" : activeInvoice ? formatCurrency(activeInvoice.total) : formatCurrency(0)}
           />
           <SummaryCard
             icon={Calendar}
             label="Fechamento"
-            value={selectedCard ? `Dia ${selectedCard.closingDay}` : "—"}
+            value={selectedCard?.closingDay != null ? `Dia ${selectedCard.closingDay}` : "Não informado"}
           />
         </div>
 
@@ -189,7 +221,26 @@ export default function Cards() {
               onDelete={handleRequestDelete}
             />
 
-            {activeInvoice && (
+            {activeInvoice?.needsSetup && (
+              <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
+                <h2 className="text-base font-bold text-ink-900">Fatura atual — {activeInvoice.card.name}</h2>
+                <p className="mt-2 text-sm text-ink-500">
+                  Este cartão ainda não tem dia de fechamento e vencimento definidos, então não é possível calcular a
+                  fatura atual.
+                </p>
+                <button
+                  onClick={() => {
+                    setEditingCard(activeInvoice.card);
+                    setDrawerOpen(true);
+                  }}
+                  className="mt-4 w-full rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+                >
+                  Definir fechamento e vencimento
+                </button>
+              </div>
+            )}
+
+            {activeInvoice && !activeInvoice.needsSetup && activeInvoice.period && (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
                 <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
                   <h2 className="text-base font-bold text-ink-900">Fatura atual — {activeInvoice.card.name}</h2>
@@ -200,9 +251,20 @@ export default function Cards() {
                   <div className="mt-4">
                     <div className="mb-1 flex justify-between text-xs text-ink-500">
                       <span>Limite utilizado</span>
-                      <span>{activeInvoice.card.limit > 0 ? Math.round((activeInvoice.total / activeInvoice.card.limit) * 100) : 0}%</span>
+                      <span>
+                        {activeInvoice.card.limit == null
+                          ? "Não informado"
+                          : `${activeInvoice.card.limit > 0 ? Math.round((activeInvoice.total / activeInvoice.card.limit) * 100) : 0}%`}
+                      </span>
                     </div>
-                    <ProgressBar percent={activeInvoice.card.limit > 0 ? (activeInvoice.total / activeInvoice.card.limit) * 100 : 0} colorClassName="bg-danger-500" />
+                    <ProgressBar
+                      percent={
+                        activeInvoice.card.limit != null && activeInvoice.card.limit > 0
+                          ? (activeInvoice.total / activeInvoice.card.limit) * 100
+                          : 0
+                      }
+                      colorClassName="bg-danger-500"
+                    />
                   </div>
                   {activeInvoice.paid ? (
                     <button

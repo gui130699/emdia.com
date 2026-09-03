@@ -111,7 +111,7 @@ interface FinanceDataValue {
     asOfDate: string,
     source: BalanceSnapshot["source"],
     importBatchId?: string
-  ) => Promise<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" }>;
+  ) => Promise<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" | "initial_reference" }>;
   createBalanceAdjustment: (accountId: string, amount: number, date: string, notes?: string) => Promise<void>;
 
   addTransaction: (input: TransactionInput) => Promise<void>;
@@ -299,7 +299,14 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         const relevantTransactions = freshTransactions.filter((t) => t.date <= asOfDate);
         const calculated = freshAccount ? computeAccountBalance(freshAccount, relevantTransactions, priorSnapshots) : reportedBalance;
         const difference = Math.round((reportedBalance - calculated) * 100) / 100;
-        const status: "conferred" | "discrepancy" = Math.abs(difference) < 0.01 ? "conferred" : "discrepancy";
+        // With no prior snapshot at all, "calculated" is just initialBalance
+        // (0 for a fresh account) plus whatever transactions this same
+        // import just created — comparing that against the bank's real
+        // balance is comparing against a baseline that was never
+        // established, not a real discrepancy. The bank's number becomes
+        // the new reference point instead of a false warning.
+        const status: "conferred" | "discrepancy" | "initial_reference" =
+          priorSnapshots.length === 0 ? "initial_reference" : Math.abs(difference) < 0.01 ? "conferred" : "discrepancy";
 
         await balanceSnapshotService.create(userId, { accountId, balance: reportedBalance, asOfDate, source, importBatchId });
         setBalanceSnapshots(await balanceSnapshotService.list(userId));
@@ -566,8 +573,8 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
           await transactionService.remove(userId, t.id);
         }
         const card = cards.find((c) => c.id === invoice.cardId);
-        if (card) {
-          const period = getCurrentInvoicePeriod(card, new Date(invoice.periodEnd + "T00:00:00"));
+        const period = card ? getCurrentInvoicePeriod(card, new Date(invoice.periodEnd + "T00:00:00")) : undefined;
+        if (period) {
           await installmentService.markInstallmentsUnpaid(userId, invoice.cardId, period.cycleStart, period.cycleEnd);
         }
         await invoiceService.remove(userId, invoiceId);

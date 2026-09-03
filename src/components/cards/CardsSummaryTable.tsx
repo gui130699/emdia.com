@@ -5,7 +5,19 @@ import type { CreditCard } from "../../types/finance";
 import type { InvoicePeriod } from "../../utils/cardInvoice";
 
 interface CardsSummaryTableProps {
-  rows: { card: CreditCard; total: number; period: InvoicePeriod }[];
+  rows: { card: CreditCard; total: number; period?: InvoicePeriod }[];
+}
+
+function limitLabel(limit: number | undefined): string {
+  return limit == null ? "Não informado" : formatCurrency(limit);
+}
+
+function availableLabel(limit: number | undefined, total: number): string {
+  return limit == null ? "Não disponível" : formatCurrency(limit - total);
+}
+
+function dueDateLabel(period: InvoicePeriod | undefined): string {
+  return period ? formatDateObj(period.dueDate) : "—";
 }
 
 export default function CardsSummaryTable({ rows }: CardsSummaryTableProps) {
@@ -26,15 +38,15 @@ export default function CardsSummaryTable({ rows }: CardsSummaryTableProps) {
             {rows.map(({ card, total, period }) => (
               <tr key={card.id} className="border-b border-ink-100 last:border-0">
                 <td className="py-2.5 pr-3 font-medium text-ink-900">
-                  <span className="flex items-center gap-2">
+                  <div className="flex items-center gap-2">
                     <BankLogo name={card.institution} code={card.institutionCode} logoUrl={card.institutionLogoUrl} size={24} />
                     {card.name} •••• {card.lastFourDigits}
-                  </span>
+                  </div>
                 </td>
-                <td className="py-2.5 pr-3 text-ink-500">{formatCurrency(card.limit)}</td>
+                <td className="py-2.5 pr-3 text-ink-500">{limitLabel(card.limit)}</td>
                 <td className="py-2.5 pr-3 text-ink-500">{formatCurrency(total)}</td>
-                <td className="py-2.5 pr-3 text-ink-500">{formatCurrency(card.limit - total)}</td>
-                <td className="py-2.5 pr-3 text-ink-500">{formatDateObj(period.dueDate)}</td>
+                <td className="py-2.5 pr-3 text-ink-500">{availableLabel(card.limit, total)}</td>
+                <td className="py-2.5 pr-3 text-ink-500">{dueDateLabel(period)}</td>
               </tr>
             ))}
           </tbody>
@@ -50,13 +62,13 @@ export default function CardsSummaryTable({ rows }: CardsSummaryTableProps) {
             </div>
             <div className="mt-2 grid grid-cols-2 gap-y-1.5 text-xs">
               <span className="text-ink-400">Limite</span>
-              <span className="text-right font-medium text-ink-900">{formatCurrency(card.limit)}</span>
+              <span className="text-right font-medium text-ink-900">{limitLabel(card.limit)}</span>
               <span className="text-ink-400">Utilizado</span>
               <span className="text-right font-medium text-ink-900">{formatCurrency(total)}</span>
               <span className="text-ink-400">Disponível</span>
-              <span className="text-right font-medium text-ink-900">{formatCurrency(card.limit - total)}</span>
+              <span className="text-right font-medium text-ink-900">{availableLabel(card.limit, total)}</span>
               <span className="text-ink-400">Vencimento</span>
-              <span className="text-right font-medium text-ink-900">{formatDateObj(period.dueDate)}</span>
+              <span className="text-right font-medium text-ink-900">{dueDateLabel(period)}</span>
             </div>
           </li>
         ))}

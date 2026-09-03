@@ -176,7 +176,12 @@ export interface RawImportRow {
   description: string;
   amount: number; // always positive — sign is carried by `type`
   type: "income" | "expense";
-  externalIdHint?: string; // e.g. OFX FITID, or a mapped CSV id column
+  /** OFX FITID or a mapped CSV id column — real-world files (confirmed with
+   * an actual Nubank statement) can repeat the same FITID across multiple,
+   * genuinely different records, so this is folded into the fingerprint as
+   * extra entropy rather than trusted alone as a unique key (see
+   * classifyRows below). */
+  externalGroupId?: string;
   looksLikePaymentOrRefund?: boolean;
   /** The original statement sign, preserved separately from `type` (which
    * is forced to "expense" for every card row so invoice math treats it
@@ -206,6 +211,10 @@ export interface ImportPreviewRow {
     invoicePeriod?: InvoicePeriod;
     installmentCount?: number;
     installmentTotalAmount?: number;
+    /** Which parcela this row is (1 when it's the first, but a plan can
+     * also be created starting mid-sequence — e.g. detected first at 4/10 —
+     * without fabricating parcelas 1-3, which were never actually seen. */
+    installmentStartNumber?: number;
     confirmed: boolean;
     confidenceScore?: number;
     confidenceLevel?: ConfidenceLevel;
@@ -286,7 +295,7 @@ export function ofxToRawRows(ofx: ParsedOfx): RawImportRow[] {
       description,
       amount: Math.abs(t.amount),
       type: ofx.isCreditCard ? "expense" : isCredit ? "income" : "expense",
-      externalIdHint: t.fitId ? `ofx:${t.fitId}` : undefined,
+      externalGroupId: t.fitId,
       looksLikePaymentOrRefund,
       isCreditEntry: isCredit,
     };
@@ -368,7 +377,7 @@ export function csvRowsToRawRows(rows: string[][], mapping: CsvColumnMapping, he
       description,
       amount,
       type,
-      externalIdHint: idIdx >= 0 && row[idIdx] ? `csv:${row[idIdx].trim()}` : undefined,
+      externalGroupId: idIdx >= 0 && row[idIdx] ? row[idIdx].trim() : undefined,
       isCreditEntry: type === "income",
     });
   }
@@ -435,19 +444,30 @@ async function classifyRows(
         .map((card) => {
           const period = getCurrentInvoicePeriod(card);
           const total = invoiceTotalForPeriod(ctx.existingTransactions, card.id, period);
-          const alreadyPaid = ctx.invoices.some((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey && inv.status === "paid");
+          const alreadyPaid = !!period && ctx.invoices.some((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey && inv.status === "paid");
           return { card, period, total, alreadyPaid };
         })
-        .filter((entry) => entry.total > 0 && !entry.alreadyPaid)
+        .filter((entry): entry is typeof entry & { period: InvoicePeriod } => !!entry.period && entry.total > 0 && !entry.alreadyPaid)
     : [];
 
   const rows: ImportPreviewRow[] = [];
 
   for (const raw of rawRows) {
     const normalizedDescription = normalizeDescription(raw.description);
-    const externalId =
-      raw.externalIdHint ??
-      `${fileType}:${fingerprint(ctx.userId, ctx.target.accountId ?? ctx.target.cardId ?? "", raw.date, raw.amount, raw.type, normalizedDescription)}`;
+    // FITID (and some banks' CSV "id" column) can repeat across genuinely
+    // different records — confirmed with a real Nubank statement — so it's
+    // folded in as extra entropy alongside date/amount/description instead
+    // of being trusted alone as a unique key, which would silently drop
+    // real transactions that happen to share one.
+    const externalId = `${fileType}:${fingerprint(
+      ctx.userId,
+      ctx.target.accountId ?? ctx.target.cardId ?? "",
+      raw.date,
+      raw.amount,
+      raw.type,
+      normalizedDescription,
+      raw.externalGroupId ?? ""
+    )}`;
 
     let status: ImportRecordStatus = "valid";
     let statusReason: string | undefined;
@@ -573,18 +593,27 @@ async function classifyRows(
             status = "duplicate";
             statusReason = `Esta parcela (${number}/${total}) já está registrada no parcelamento "${existingPlan!.description}".`;
             installmentMatch = { number, total, baseDescription, existingPlanId: existingPlan!.id };
-          } else if (number === 1 && !suggestion) {
+          } else if (!existingPlan && !suggestion) {
+            // Not just number === 1 — a real statement can be imported for
+            // the first time on ANY parcela of an ongoing purchase (e.g. the
+            // user only starts importing from month 4 of a 10x purchase).
+            // Requiring 1/N here silently dropped every later-starting
+            // installment plan into a loose, unlinked purchase.
             status = "needsReview";
             suggestion = {
               kind: "installment_new",
-              label: `Esta compra parece ser a 1ª de ${total} parcelas. Criar um parcelamento?`,
+              label:
+                number === 1
+                  ? `Esta compra parece ser a 1ª de ${total} parcelas. Criar um parcelamento?`
+                  : `Encontramos a parcela ${number} de ${total}. Deseja criar o parcelamento a partir daqui?`,
               installmentCount: total,
+              installmentStartNumber: number,
               installmentTotalAmount: Math.round(raw.amount * total * 100) / 100,
               confirmed: false,
             };
             installmentMatch = { number, total, baseDescription };
           } else {
-            installmentMatch = { number, total, baseDescription };
+            installmentMatch = { number, total, baseDescription, existingPlanId: existingPlan?.id };
           }
         }
       }
@@ -785,7 +814,12 @@ export const importService = {
           categoryId: row.categoryId || "",
           totalAmount: row.suggestion.installmentTotalAmount ?? row.amount * row.suggestion.installmentCount,
           installmentCount: row.suggestion.installmentCount,
+          // row.date is the date of THIS parcela, which may not be
+          // parcela 1 — startNumber tells installmentService.create to
+          // generate only from here on, never fabricating earlier ones.
           firstInstallmentDate: row.date,
+          startNumber: row.suggestion.installmentStartNumber ?? 1,
+          installmentAmount: row.amount,
           paymentMethod: "credito",
           source: "import",
           importBatchId: batchId,

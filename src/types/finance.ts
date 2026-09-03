@@ -1,6 +1,6 @@
 export type BankAccountKind = "corrente" | "poupanca" | "digital" | "carteira" | "outro";
 
-export type ReconciliationStatus = "unreconciled" | "conferred" | "discrepancy";
+export type ReconciliationStatus = "unreconciled" | "conferred" | "discrepancy" | "initial_reference";
 
 export interface BankAccount {
   id: string;
@@ -208,9 +208,15 @@ export interface CreditCard {
   institutionLogoUrl?: string;
   type: CardType;
   lastFourDigits: string;
-  limit: number;
-  closingDay: number;
-  dueDay: number;
+  /** Undefined means "not informed" — a very different thing from a real
+   * R$0 limit. Never default this to 0 just because a source (like a card
+   * statement import) didn't provide a number. */
+  limit?: number;
+  /** Undefined means the cycle boundaries aren't known yet — never default
+   * to 5/15 just to have *a* number; callers must handle "not computable
+   * yet" instead (see getCurrentInvoicePeriod). */
+  closingDay?: number;
+  dueDay?: number;
   /** Suggested account for paying this card's invoice. */
   accountId?: string;
   /** The bank's own card/account identifier (masked in the UI) — lets a

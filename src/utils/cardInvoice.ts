@@ -13,28 +13,37 @@ function clampDay(year: number, month: number, day: number): Date {
   return new Date(year, month, Math.min(day, lastDay));
 }
 
-export function getCurrentInvoicePeriod(card: CreditCard, reference: Date = new Date()): InvoicePeriod {
+/** Returns undefined when the card's closing/due day aren't known yet
+ * (e.g. a card created from a statement import that never provided them) —
+ * callers must show a "defina o fechamento" prompt instead of computing a
+ * cycle from fabricated defaults, which would silently misrepresent the
+ * invoice's real due date. */
+export function getCurrentInvoicePeriod(card: CreditCard, reference: Date = new Date()): InvoicePeriod | undefined {
+  if (card.closingDay == null || card.dueDay == null) return undefined;
+  const closingDay = card.closingDay;
+  const dueDay = card.dueDay;
   const year = reference.getFullYear();
   const month = reference.getMonth();
 
-  let cycleEnd = clampDay(year, month, card.closingDay);
+  let cycleEnd = clampDay(year, month, closingDay);
   if (reference > cycleEnd) {
-    cycleEnd = clampDay(year, month + 1, card.closingDay);
+    cycleEnd = clampDay(year, month + 1, closingDay);
   }
 
   const prevCycleEndMonth = cycleEnd.getMonth() - 1;
-  const cycleStart = clampDay(cycleEnd.getFullYear(), prevCycleEndMonth, card.closingDay);
+  const cycleStart = clampDay(cycleEnd.getFullYear(), prevCycleEndMonth, closingDay);
   cycleStart.setDate(cycleStart.getDate() + 1);
 
-  let dueDate = clampDay(cycleEnd.getFullYear(), cycleEnd.getMonth(), card.dueDay);
+  let dueDate = clampDay(cycleEnd.getFullYear(), cycleEnd.getMonth(), dueDay);
   if (dueDate <= cycleEnd) {
-    dueDate = clampDay(cycleEnd.getFullYear(), cycleEnd.getMonth() + 1, card.dueDay);
+    dueDate = clampDay(cycleEnd.getFullYear(), cycleEnd.getMonth() + 1, dueDay);
   }
 
   return { cycleStart, cycleEnd, dueDate, periodKey: format(cycleEnd, "yyyy-MM") };
 }
 
-export function transactionsInPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod): Transaction[] {
+export function transactionsInPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod | undefined): Transaction[] {
+  if (!period) return [];
   return transactions.filter((t) => {
     if (t.cardId !== cardId) return false;
     const date = new Date(t.date + "T00:00:00");
@@ -52,6 +61,7 @@ export function signedCardAmount(t: Transaction): number {
   return t.amount;
 }
 
-export function invoiceTotalForPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod): number {
+export function invoiceTotalForPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod | undefined): number {
+  if (!period) return 0;
   return transactionsInPeriod(transactions, cardId, period).reduce((sum, t) => sum + signedCardAmount(t), 0);
 }

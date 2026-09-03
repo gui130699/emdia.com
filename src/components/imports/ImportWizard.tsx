@@ -81,7 +81,12 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
   const [step, setStep] = useState<Step>("select");
   const [targetAccountId, setTargetAccountId] = useState(fixedAccountId ?? "");
-  const [targetCardId, setTargetCardId] = useState(fixedCardId ?? cards.find((c) => c.type === "credito")?.id ?? "");
+  // Never falls back to "the first credit card" — the destination must come
+  // from an explicit match, the user's own choice, or a fixedCardId prop.
+  // Using the first card here would silently misattribute a CSV/QIF import
+  // (which has no per-row account/card signal to correct it later) to
+  // whatever card happens to be first in the list.
+  const [targetCardId, setTargetCardId] = useState(fixedCardId ?? "");
   const [loadingLabel, setLoadingLabel] = useState("");
 
   const [fileName, setFileName] = useState("");
@@ -94,7 +99,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [lastOfx, setLastOfx] = useState<ParsedOfx | null>(null);
   const [lastQif, setLastQif] = useState<ParsedQif | null>(null);
   const [committedBatchId, setCommittedBatchId] = useState<string | null>(null);
-  const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" } | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" | "initial_reference" } | null>(null);
   const [correctedBalance, setCorrectedBalance] = useState(0);
 
   // "match" step (OFX account/card imports)
@@ -109,6 +114,12 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [newAccountKind, setNewAccountKind] = useState<BankAccountKind>("corrente");
   const [newAccountBalance, setNewAccountBalance] = useState(0);
   const [newAccountAsOf, setNewAccountAsOf] = useState(todayISO());
+  // Tracks whether the user actually typed a balance — the CurrencyInput's
+  // displayed "0" is just its empty state, never an implicit "saldo zero
+  // informado". Without this, every account created here would silently
+  // get a manual R$0 snapshot dated today, which can outrank (as "more
+  // recent") the file's own real balance in balanceService's snapshot pick.
+  const [newAccountBalanceTouched, setNewAccountBalanceTouched] = useState(false);
 
   // Same "match" step, card variant
   const [candidateCardId, setCandidateCardId] = useState<string | undefined>();
@@ -143,6 +154,9 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setTargetCardId(fixedCardId ?? "");
     setNewCardName("");
     setNewCardLastFour("");
+    setNewAccountBalance(0);
+    setNewAccountAsOf(todayISO());
+    setNewAccountBalanceTouched(false);
     setLoadingLabel("");
   }
 
@@ -374,12 +388,19 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     if (!lastOfx || !newAccountName.trim()) return;
     setCreatingAccount(true);
     try {
+      // The file's own balance (when present) is the source of truth and
+      // gets recorded as a snapshot during commit — asking the user to also
+      // type one here, or silently sending the field's "0" default, would
+      // create a second, artificial manual snapshot that can outrank the
+      // real one. Only pass a manual balance when the user actually typed
+      // one (relevant when the OFX has no balance at all).
+      const hasOfxBalance = !!lastOfx.balance;
       const account = await addBankAccount(
         newAccountName.trim(),
         newAccountKind,
         detectedCode ? { code: detectedCode, name: detectedName ?? newAccountName, fullName: detectedName ?? newAccountName, ispb: "" } : undefined,
-        newAccountBalance,
-        newAccountAsOf,
+        !hasOfxBalance && newAccountBalanceTouched ? newAccountBalance : undefined,
+        !hasOfxBalance && newAccountBalanceTouched ? newAccountAsOf : undefined,
         { externalBankAccountId: lastOfx.accountId, externalBranchId: lastOfx.branchId }
       );
       show(`Conta "${account.name}" criada.`);
@@ -412,9 +433,6 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
         institutionCode: detectedCode,
         type: "credito",
         lastFourDigits: newCardLastFour,
-        limit: 0,
-        closingDay: 5,
-        dueDay: 15,
         color: "#0a6847",
         externalCardAccountId: lastOfx.accountId,
       });
@@ -683,21 +701,44 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                     <FormField label="Nome da conta">
                       <input className={inputClass} value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} />
                     </FormField>
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormField label="Tipo">
-                        <select className={inputClass} value={newAccountKind} onChange={(e) => setNewAccountKind(e.target.value as BankAccountKind)}>
-                          {Object.entries(KIND_LABELS).map(([value, label]) => (
-                            <option key={value} value={value}>{label}</option>
-                          ))}
-                        </select>
-                      </FormField>
-                      <FormField label="Saldo atual">
-                        <CurrencyInput value={newAccountBalance} onChange={setNewAccountBalance} />
-                      </FormField>
-                    </div>
-                    <FormField label="Posição em">
-                      <input type="date" className={inputClass} value={newAccountAsOf} onChange={(e) => setNewAccountAsOf(e.target.value)} />
+                    <FormField label="Tipo">
+                      <select className={inputClass} value={newAccountKind} onChange={(e) => setNewAccountKind(e.target.value as BankAccountKind)}>
+                        {Object.entries(KIND_LABELS).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
                     </FormField>
+
+                    {lastOfx?.balance ? (
+                      <p className="rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-700">
+                        Saldo informado pelo arquivo: <strong>{formatCurrency(lastOfx.balance.amount)}</strong>
+                        {lastOfx.balance.asOf ? ` em ${formatDate(lastOfx.balance.asOf)}` : ""}. Esse saldo será registrado
+                        automaticamente ao concluir a importação — não é preciso digitá-lo aqui.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3">
+                        <FormField label="Saldo atual (opcional)">
+                          <CurrencyInput
+                            value={newAccountBalance}
+                            onChange={(v) => {
+                              setNewAccountBalance(v);
+                              setNewAccountBalanceTouched(true);
+                            }}
+                          />
+                        </FormField>
+                        <FormField label="Posição em">
+                          <input
+                            type="date"
+                            className={inputClass}
+                            value={newAccountAsOf}
+                            onChange={(e) => {
+                              setNewAccountAsOf(e.target.value);
+                              setNewAccountBalanceTouched(true);
+                            }}
+                          />
+                        </FormField>
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -998,7 +1039,10 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
                           {row.installmentMatch && !row.suggestion && !disabled && (
                             <p className="mt-1 text-xs text-ink-400">
-                              Parcela {row.installmentMatch.number}/{row.installmentMatch.total} detectada — nenhum parcelamento correspondente encontrado, será importada como compra avulsa.
+                              Parcela {row.installmentMatch.number}/{row.installmentMatch.total} detectada
+                              {row.installmentMatch.existingPlanId
+                                ? " — esta parcela específica não está no parcelamento existente, será importada como compra avulsa."
+                                : " — nenhum parcelamento correspondente encontrado, será importada como compra avulsa."}
                             </p>
                           )}
 
@@ -1044,7 +1088,11 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
           {step === "reconciliation" && reconciliation && (
             <div className="space-y-4">
-              {reconciliation.status === "conferred" ? (
+              {reconciliation.status === "initial_reference" ? (
+                <div className="flex items-center gap-2 rounded-lg bg-success-50 px-4 py-3 text-sm font-semibold text-success-700">
+                  <CheckCircle2 size={18} /> Saldo inicial registrado: {formatCurrency(reconciliation.reported)}
+                </div>
+              ) : reconciliation.status === "conferred" ? (
                 <div className="flex items-center gap-2 rounded-lg bg-success-50 px-4 py-3 text-sm font-semibold text-success-700">
                   <CheckCircle2 size={18} /> Saldo conferido
                 </div>
@@ -1076,12 +1124,12 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
               <button
                 onClick={handleClose}
                 className={
-                  reconciliation.status === "conferred"
+                  reconciliation.status !== "discrepancy"
                     ? "w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700"
                     : "w-full rounded-lg px-3 py-2 text-sm font-medium text-ink-500 hover:bg-ink-50"
                 }
               >
-                {reconciliation.status === "conferred" ? "Concluir" : "Revisar movimentações e decidir depois"}
+                {reconciliation.status !== "discrepancy" ? "Concluir" : "Revisar movimentações e decidir depois"}
               </button>
             </div>
           )}

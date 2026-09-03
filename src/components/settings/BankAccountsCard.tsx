@@ -102,15 +102,19 @@ export default function BankAccountsCard() {
                     {account.reconciliationStatus && account.reconciliationStatus !== "unreconciled" && (
                       <p
                         className={`mt-0.5 flex items-center gap-1 text-xs ${
-                          account.reconciliationStatus === "conferred" ? "text-success-600" : "text-warning-600"
+                          account.reconciliationStatus === "discrepancy" ? "text-warning-600" : "text-success-600"
                         }`}
                       >
-                        {account.reconciliationStatus === "conferred" ? (
-                          <CheckCircle2 size={11} />
-                        ) : (
+                        {account.reconciliationStatus === "discrepancy" ? (
                           <AlertTriangle size={11} />
+                        ) : (
+                          <CheckCircle2 size={11} />
                         )}
-                        {account.reconciliationStatus === "conferred" ? "Saldo conferido" : "Diferença encontrada"}
+                        {account.reconciliationStatus === "discrepancy"
+                          ? "Diferença encontrada"
+                          : account.reconciliationStatus === "initial_reference"
+                            ? "Saldo inicial registrado"
+                            : "Saldo conferido"}
                         {account.lastReconciledAt ? ` · ${formatDate(account.lastReconciledAt.slice(0, 10))}` : ""}
                       </p>
                     )}

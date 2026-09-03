@@ -16,7 +16,19 @@ export interface CreateInstallmentPlanInput {
   categoryId: string;
   totalAmount: number;
   installmentCount: number;
+  /** Date of the first parcela this call actually generates — startNumber
+   * when set, otherwise parcela 1. */
   firstInstallmentDate: string;
+  /** Defaults to 1. When a purchase's plan is first detected mid-sequence
+   * (e.g. a statement first imported at parcela 4 of 10), only parcelas
+   * startNumber..installmentCount are generated — parcelas before that were
+   * never actually seen and must not be fabricated as paid or scheduled. */
+  startNumber?: number;
+  /** The real, observed value of one parcela (known from the imported
+   * row) — used directly instead of splitting totalAmount, which matters
+   * for a mid-sequence start since totalAmount there is only an estimate
+   * (parcela value × count) rather than a true total. */
+  installmentAmount?: number;
   paymentMethod?: PaymentMethod;
   /** Only set when the plan originates from an import — tags every
    * installment transaction so it shows up as "Importada" and rolls up
@@ -63,16 +75,22 @@ export const installmentService = {
     };
     await planStore.create(userId, plan);
 
-    const amountsInCents = splitIntoCents(input.totalAmount, input.installmentCount);
+    const startNumber = input.startNumber ?? 1;
+    const remainingCount = input.installmentCount - startNumber + 1;
+    const amountsInCents =
+      input.installmentAmount != null
+        ? Array.from({ length: remainingCount }, () => Math.round(input.installmentAmount! * 100))
+        : splitIntoCents(input.totalAmount, input.installmentCount).slice(startNumber - 1);
     const firstDate = new Date(input.firstInstallmentDate + "T00:00:00");
 
-    for (let i = 0; i < input.installmentCount; i++) {
+    for (let i = 0; i < remainingCount; i++) {
+      const number = startNumber + i;
       const dueDate = toDateInputValue(addMonths(firstDate, i));
       const amount = amountsInCents[i] / 100;
 
       const transaction = await transactionService.create(userId, {
         type: "expense",
-        description: `${input.description} ${i + 1}/${input.installmentCount}`,
+        description: `${input.description} ${number}/${input.installmentCount}`,
         amount,
         date: dueDate,
         categoryId: input.categoryId,
@@ -85,7 +103,7 @@ export const installmentService = {
         originType: "installment",
         originId: plan.id,
         installmentPlanId: plan.id,
-        installmentNumber: i + 1,
+        installmentNumber: number,
       });
 
       const installment: Installment = {
@@ -93,7 +111,7 @@ export const installmentService = {
         userId,
         installmentPlanId: plan.id,
         cardId: input.cardId,
-        number: i + 1,
+        number,
         totalInstallments: input.installmentCount,
         amount,
         dueDate,

@@ -112,6 +112,7 @@ export async function migrateFromLocalStorage(userId: string): Promise<void> {
         const [year, month] = periodKey.split("-").map(Number);
         const reference = new Date(year, (month ?? 1) - 1, 15);
         const period = getCurrentInvoicePeriod(card, reference);
+        if (!period) continue;
         const total = legacyTransactions
           .filter((t) => {
             if (t.cardId !== cardId) return false;

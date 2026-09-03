@@ -22,7 +22,12 @@ export interface ParsedOfx {
   branchId?: string;
   accountId?: string;
   accountType?: string;
+  /** LEDGERBAL — the account/card's ledger position, kept separate from
+   * availableBalance since they answer different questions (what's posted
+   * vs. what you can still spend/withdraw) and must never be conflated. */
   balance?: { amount: number; asOf?: string };
+  /** AVAILBAL, when the file provides it. */
+  availableBalance?: { amount: number; asOf?: string };
   transactions: OfxTransaction[];
 }
 
@@ -76,6 +81,8 @@ export function parseOfx(raw: string): ParsedOfx {
 
   const ledgerBal = doc.querySelector("LEDGERBAL");
   const balanceAmount = text(ledgerBal, "BALAMT");
+  const availBal = doc.querySelector("AVAILBAL");
+  const availableAmount = text(availBal, "BALAMT");
 
   const transactions: OfxTransaction[] = Array.from(doc.querySelectorAll("STMTTRN")).map((node) => {
     const amountText = text(node, "TRNAMT") ?? "0";
@@ -100,6 +107,9 @@ export function parseOfx(raw: string): ParsedOfx {
     accountType: text(acctNode, "ACCTTYPE"),
     balance: balanceAmount
       ? { amount: Number(balanceAmount.replace(",", ".")) || 0, asOf: ofxDateToIso(text(ledgerBal, "DTASOF")) }
+      : undefined,
+    availableBalance: availableAmount
+      ? { amount: Number(availableAmount.replace(",", ".")) || 0, asOf: ofxDateToIso(text(availBal, "DTASOF")) }
       : undefined,
     transactions: transactions.filter((t) => t.datePosted),
   };

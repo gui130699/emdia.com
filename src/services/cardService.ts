@@ -12,9 +12,9 @@ export interface CreditCardInput {
   institutionLogoUrl?: string;
   type: CreditCard["type"];
   lastFourDigits: string;
-  limit: number;
-  closingDay: number;
-  dueDay: number;
+  limit?: number;
+  closingDay?: number;
+  dueDay?: number;
   accountId?: string;
   externalCardAccountId?: string;
   color: string;
