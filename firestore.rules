@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Profile document written on signup / edited in Configurações.
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // Every entity the offline sync engine mirrors (see
+      // SYNCED_ENTITIES in src/db/syncService.ts) lives at
+      // users/{userId}/{entity}/{entityId} — only the owner may touch it.
+      match /{entity}/{entityId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}

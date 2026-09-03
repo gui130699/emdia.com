@@ -20,6 +20,7 @@ import {
   type ImportPreview,
   type ImportPreviewRow,
 } from "../../services/importService";
+import type { ParsedOfx } from "../../utils/ofxParser";
 import type { ImportRecordStatus } from "../../types/finance";
 
 interface ImportWizardProps {
@@ -40,7 +41,7 @@ const STATUS_BADGE: Record<ImportRecordStatus, { label: string; tone: "success" 
 type Step = "select" | "mapping" | "preview";
 
 export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixedCardId }: ImportWizardProps) {
-  const { bankAccounts, cards, transactions, bills, categories, reloadAll } = useFinanceData();
+  const { bankAccounts, cards, transactions, bills, categories, invoices, installmentPlans, installments, addBankAccount, reloadAll } = useFinanceData();
   const { show } = useToast();
   const { currentUser } = useAuth();
   const userId = currentUser?.uid ?? "";
@@ -57,6 +58,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [rows, setRows] = useState<ImportPreviewRow[]>([]);
+  const [lastOfx, setLastOfx] = useState<ParsedOfx | null>(null);
+  const [creatingAccount, setCreatingAccount] = useState(false);
 
   const creditCards = cards.filter((c) => c.type === "credito");
   const target = mode === "card" ? { cardId: targetCardId } : { accountId: targetAccountId };
@@ -84,10 +87,15 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       bills,
       bankAccounts,
       categories,
+      cards,
+      invoices,
+      installmentPlans,
+      installments,
     };
     if (source === "ofx") {
       setLoadingLabel("Analisando arquivo...");
       const ofx = parseOfxFile(text);
+      setLastOfx(ofx);
       setLoadingLabel("Verificando duplicidades...");
       const result = await buildOfxPreview(ctx, fileName, ofx);
       setPreview(result);
@@ -112,6 +120,40 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setLoadingLabel("");
   }
 
+  async function handleCreateDetectedAccount() {
+    if (!preview?.institutionCode || !preview.institutionName || !lastOfx) return;
+    setCreatingAccount(true);
+    try {
+      const account = await addBankAccount(
+        preview.institutionName,
+        "corrente",
+        { code: preview.institutionCode, name: preview.institutionName, fullName: preview.institutionName, ispb: "" },
+        0
+      );
+      setTargetAccountId(account.id);
+      setLoadingLabel("Verificando duplicidades...");
+      const ctx = {
+        userId,
+        target: { accountId: account.id },
+        existingTransactions: transactions,
+        bills,
+        bankAccounts: [...bankAccounts, account],
+        categories,
+        cards,
+        invoices,
+        installmentPlans,
+        installments,
+      };
+      const result = await buildOfxPreview(ctx, fileName, lastOfx);
+      setPreview(result);
+      setRows(result.rows);
+      show(`Conta "${account.name}" criada.`);
+    } finally {
+      setCreatingAccount(false);
+      setLoadingLabel("");
+    }
+  }
+
   async function handleFile(file: File) {
     setFileName(file.name);
     setLoadingLabel("Lendo arquivo...");
@@ -131,7 +173,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       return;
     }
     setLoadingLabel("Verificando duplicidades...");
-    const ctx = { userId, target, existingTransactions: transactions, bills, bankAccounts, categories };
+    const ctx = { userId, target, existingTransactions: transactions, bills, bankAccounts, categories, cards, invoices, installmentPlans, installments };
     const result = await buildCsvPreview(ctx, fileName, csvHeaders, csvRows, mapping);
     setPreview(result);
     setRows(result.rows);
@@ -296,9 +338,20 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
           {step === "preview" && preview && (
             <div className="space-y-4">
               {preview.institutionName && (
-                <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">
-                  Banco detectado: {preview.institutionName} {preview.institutionCode ? `/ código ${preview.institutionCode}` : ""}
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">
+                  <span>
+                    Banco detectado: {preview.institutionName} {preview.institutionCode ? `/ código ${preview.institutionCode}` : ""}
+                  </span>
+                  {mode === "account" && !bankAccounts.some((a) => a.institutionCode === preview.institutionCode) && (
+                    <button
+                      onClick={handleCreateDetectedAccount}
+                      disabled={creatingAccount}
+                      className="rounded-lg border border-brand-600 bg-surface px-2.5 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-50"
+                    >
+                      + Criar conta para {preview.institutionName}
+                    </button>
+                  )}
+                </div>
               )}
 
               <div className="flex flex-wrap items-center gap-3 text-xs text-ink-500">
@@ -346,6 +399,12 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                           </div>
 
                           {row.statusReason && <p className="mt-1 text-xs text-ink-400">{row.statusReason}</p>}
+
+                          {row.installmentMatch && !row.suggestion && !disabled && (
+                            <p className="mt-1 text-xs text-ink-400">
+                              Parcela {row.installmentMatch.number}/{row.installmentMatch.total} detectada — nenhum parcelamento correspondente encontrado, será importada como compra avulsa.
+                            </p>
+                          )}
 
                           {row.suggestion && (
                             <label className="mt-2 flex items-center gap-2 rounded-lg bg-warning-500/10 px-2.5 py-1.5 text-xs text-warning-700">

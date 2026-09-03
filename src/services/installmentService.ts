@@ -3,7 +3,7 @@ import { createRepository } from "../db/dexieRepository";
 import { generateId } from "./localStore";
 import { transactionService } from "./transactionService";
 import { toDateInputValue } from "../utils/date";
-import type { Installment, InstallmentPlan, PaymentMethod } from "../types/finance";
+import type { Installment, InstallmentPlan, PaymentMethod, Transaction } from "../types/finance";
 
 const planStore = createRepository<InstallmentPlan>("installmentPlans");
 const installmentStore = createRepository<Installment>("installments");
@@ -18,6 +18,11 @@ export interface CreateInstallmentPlanInput {
   installmentCount: number;
   firstInstallmentDate: string;
   paymentMethod?: PaymentMethod;
+  /** Only set when the plan originates from an import — tags every
+   * installment transaction so it shows up as "Importada" and rolls up
+   * into that batch's undo safety checks. */
+  source?: Transaction["source"];
+  importBatchId?: string;
 }
 
 /** Splits a total into N integer-cent installments where every parcela is
@@ -75,7 +80,8 @@ export const installmentService = {
         cardId: input.cardId,
         paymentMethod: input.paymentMethod ?? "credito",
         recurring: false,
-        source: "manual",
+        source: input.source ?? "manual",
+        importBatchId: input.importBatchId,
         originType: "installment",
         originId: plan.id,
         installmentPlanId: plan.id,

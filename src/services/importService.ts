@@ -2,21 +2,32 @@ import { createRepository } from "../db/dexieRepository";
 import { generateId } from "./localStore";
 import { transactionService } from "./transactionService";
 import { accountService } from "./accountService";
+import { invoiceService } from "./invoiceService";
+import { installmentService } from "./installmentService";
 import { categorizationRuleService } from "./categorizationRuleService";
 import { normalizeDescription } from "../utils/normalizeDescription";
 import { fingerprint } from "../utils/fingerprint";
 import { parseOfx, type ParsedOfx } from "../utils/ofxParser";
 import { parseCsv, parseCsvAmount, parseCsvDate } from "../utils/csvParser";
+import { getCurrentInvoicePeriod, transactionsInPeriod, type InvoicePeriod } from "../utils/cardInvoice";
 import { FALLBACK_INSTITUTIONS } from "../constants/institutions";
 import type {
   AccountBill,
   Category,
+  CreditCard,
   ImportBatch,
   ImportMapping,
   ImportRecordStatus,
   ImportSource,
+  Installment,
+  InstallmentPlan,
+  Invoice,
   Transaction,
 } from "../types/finance";
+
+/** Matches an installment pattern like "3/12", "03 / 12" or "PARC 3/10"
+ * embedded in a purchase description, e.g. "NOTEBOOK 03/12". */
+const INSTALLMENT_PATTERN = /(\d{1,2})\s*\/\s*(\d{1,2})\b/;
 
 const batchStore = createRepository<ImportBatch>("importBatches");
 const mappingStore = createRepository<ImportMapping>("importMappings");
@@ -49,11 +60,26 @@ export interface ImportPreviewRow {
   externalId: string;
   selected: boolean;
   suggestion?: {
-    kind: "transfer" | "bill";
+    kind: "transfer" | "bill" | "invoice" | "installment_new";
     label: string;
     billId?: string;
     destinationAccountId?: string;
+    invoiceCardId?: string;
+    invoicePeriod?: InvoicePeriod;
+    installmentCount?: number;
+    installmentTotalAmount?: number;
     confirmed: boolean;
+  };
+  /** Set when the description matches an "N/M" installment pattern. If it
+   * already lines up with an existing plan's installment, the row is a
+   * duplicate (that parcela already has its own transaction) — otherwise
+   * it's shown for information only, or as an installment_new suggestion
+   * when it's the first parcela of a purchase we haven't seen before. */
+  installmentMatch?: {
+    number: number;
+    total: number;
+    baseDescription: string;
+    existingPlanId?: string;
   };
 }
 
@@ -75,6 +101,10 @@ export interface ImportContext {
   bills: AccountBill[];
   bankAccounts: { id: string; name: string }[];
   categories: Category[];
+  cards: CreditCard[];
+  invoices: Invoice[];
+  installmentPlans: InstallmentPlan[];
+  installments: Installment[];
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +244,25 @@ async function classifyRows(
 
   const unpaidBills = ctx.bills.filter((b) => b.status !== "paid");
 
+  // Currently-open invoice per credit card, used to suggest linking a
+  // "PAGAMENTO CARTAO"-style statement line instead of double-counting it
+  // as a generic expense. Deliberately based on *today's* cycle rather than
+  // the row's date — matching a historical statement's exact past cycle
+  // requires date math that's easy to get subtly wrong, and a wrong match
+  // here would misattribute a real payment, so we only offer this
+  // suggestion for statements imported close to when the payment happened.
+  const openInvoiceByCard = ctx.target.accountId
+    ? ctx.cards
+        .filter((c) => c.type === "credito")
+        .map((card) => {
+          const period = getCurrentInvoicePeriod(card);
+          const total = transactionsInPeriod(ctx.existingTransactions, card.id, period).reduce((sum, t) => sum + t.amount, 0);
+          const alreadyPaid = ctx.invoices.some((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey && inv.status === "paid");
+          return { card, period, total, alreadyPaid };
+        })
+        .filter((entry) => entry.total > 0 && !entry.alreadyPaid)
+    : [];
+
   const rows: ImportPreviewRow[] = [];
 
   for (const raw of rawRows) {
@@ -250,6 +299,26 @@ async function classifyRows(
       }
     }
 
+    if (!suggestion && raw.type === "expense" && ctx.target.accountId && /fatura|cartao|pagamento/.test(normalizedDescription)) {
+      const invoiceMatch = openInvoiceByCard.find(
+        (entry) =>
+          Math.abs(entry.total - raw.amount) < 0.02 &&
+          (normalizedDescription.includes(normalizeDescription(entry.card.name).split(" ")[0]) ||
+            normalizedDescription.includes("fatura") ||
+            normalizedDescription.includes("pagamento"))
+      );
+      if (invoiceMatch) {
+        status = "needsReview";
+        suggestion = {
+          kind: "invoice",
+          invoiceCardId: invoiceMatch.card.id,
+          invoicePeriod: invoiceMatch.period,
+          label: `Este lançamento pode ser o pagamento da fatura do cartão "${invoiceMatch.card.name}".`,
+          confirmed: true,
+        };
+      }
+    }
+
     if (!suggestion && raw.type === "expense" && ctx.target.accountId) {
       const partner = otherAccountTransactions.find(
         (t) =>
@@ -265,6 +334,47 @@ async function classifyRows(
           label: `Possível transferência entre suas contas (${ctx.bankAccounts.find((a) => a.id === partner.accountId)?.name ?? "outra conta"}).`,
           confirmed: false,
         };
+      }
+    }
+
+    let installmentMatch: ImportPreviewRow["installmentMatch"];
+    if (ctx.target.cardId && status !== "duplicate") {
+      const patternMatch = raw.description.match(INSTALLMENT_PATTERN);
+      if (patternMatch) {
+        const number = Number(patternMatch[1]);
+        const total = Number(patternMatch[2]);
+        if (number >= 1 && total >= 2 && number <= total) {
+          const baseDescription = raw.description.replace(INSTALLMENT_PATTERN, "").replace(/\s{2,}/g, " ").trim();
+          const normalizedBase = normalizeDescription(baseDescription);
+
+          const existingPlan = ctx.installmentPlans.find(
+            (p) =>
+              p.cardId === ctx.target.cardId &&
+              p.installmentCount === total &&
+              normalizeDescription(p.description).includes(normalizedBase.split(" ")[0] ?? "")
+          );
+          const existingInstallment = existingPlan
+            ? ctx.installments.find((i) => i.installmentPlanId === existingPlan.id && i.number === number)
+            : undefined;
+
+          if (existingInstallment?.transactionId) {
+            status = "duplicate";
+            statusReason = `Esta parcela (${number}/${total}) já está registrada no parcelamento "${existingPlan!.description}".`;
+            installmentMatch = { number, total, baseDescription, existingPlanId: existingPlan!.id };
+          } else if (number === 1 && !suggestion) {
+            status = "needsReview";
+            suggestion = {
+              kind: "installment_new",
+              label: `Esta compra parece ser a 1ª de ${total} parcelas. Criar um parcelamento?`,
+              installmentCount: total,
+              installmentTotalAmount: Math.round(raw.amount * total * 100) / 100,
+              confirmed: false,
+            };
+            installmentMatch = { number, total, baseDescription };
+          } else {
+            installmentMatch = { number, total, baseDescription };
+          }
+        }
       }
     }
 
@@ -284,8 +394,9 @@ async function classifyRows(
       statusReason,
       categoryId,
       externalId,
-      selected: status === "valid" || (status === "needsReview" && suggestion?.kind === "bill"),
+      selected: status === "valid" || (status === "needsReview" && (suggestion?.kind === "bill" || suggestion?.kind === "invoice")),
       suggestion,
+      installmentMatch,
     });
   }
 
@@ -395,6 +506,64 @@ export const importService = {
         continue;
       }
 
+      if (row.suggestion?.kind === "invoice" && row.suggestion.confirmed && row.suggestion.invoiceCardId && row.suggestion.invoicePeriod) {
+        const invoiceId = generateId();
+        const transaction = await transactionService.create(userId, {
+          type: "expense",
+          description: `Pagamento de fatura — ${row.description}`,
+          amount: row.amount,
+          date: row.date,
+          categoryId: "",
+          accountId: target.accountId ?? "",
+          cardId: row.suggestion.invoiceCardId,
+          paymentMethod: "debito",
+          recurring: false,
+          source: "import",
+          importSource: preview.fileType,
+          importBatchId: batchId,
+          originType: "credit_card_invoice",
+          originId: invoiceId,
+          externalId: row.externalId,
+          rawDescription: row.rawDescription,
+          normalizedDescription: row.normalizedDescription,
+          importedAt: new Date().toISOString(),
+        });
+        await invoiceService.recordPayment(
+          userId,
+          row.suggestion.invoiceCardId,
+          row.suggestion.invoicePeriod,
+          row.amount,
+          target.accountId ?? "",
+          transaction.id,
+          invoiceId
+        );
+        await installmentService.markInstallmentsPaid(
+          userId,
+          row.suggestion.invoiceCardId,
+          row.suggestion.invoicePeriod.cycleStart,
+          row.suggestion.invoicePeriod.cycleEnd
+        );
+        newRecords++;
+        continue;
+      }
+
+      if (row.suggestion?.kind === "installment_new" && row.suggestion.confirmed && row.suggestion.installmentCount && target.cardId) {
+        await installmentService.create(userId, {
+          sourceType: "import",
+          cardId: target.cardId,
+          description: row.installmentMatch?.baseDescription || row.description,
+          categoryId: row.categoryId || "",
+          totalAmount: row.suggestion.installmentTotalAmount ?? row.amount * row.suggestion.installmentCount,
+          installmentCount: row.suggestion.installmentCount,
+          firstInstallmentDate: row.date,
+          paymentMethod: "credito",
+          source: "import",
+          importBatchId: batchId,
+        });
+        newRecords++;
+        continue;
+      }
+
       if (row.suggestion?.kind === "transfer" && row.suggestion.confirmed && row.suggestion.destinationAccountId) {
         await transactionService.create(userId, {
           type: "transfer",
@@ -477,11 +646,14 @@ export const importService = {
 
     const all = await transactionService.list(userId);
     const imported = all.filter((t) => t.importBatchId === batchId);
-    const consolidated = imported.filter((t) => t.originType === "bill" || t.originType === "credit_card_invoice");
+    const consolidated = imported.filter(
+      (t) => t.originType === "bill" || t.originType === "credit_card_invoice" || t.originType === "installment"
+    );
     if (consolidated.length > 0) {
       return {
         ok: false,
-        reason: "Alguns lançamentos desta importação já quitaram contas ou faturas — reabra o pagamento correspondente antes de desfazer a importação.",
+        reason:
+          "Alguns lançamentos desta importação já quitaram contas/faturas ou criaram um parcelamento — reabra o pagamento ou exclua o parcelamento correspondente antes de desfazer a importação.",
       };
     }
 

@@ -85,7 +85,7 @@ interface FinanceDataValue {
     kind: BankAccount["kind"],
     institution?: FinancialInstitution,
     initialBalance?: number
-  ) => Promise<void>;
+  ) => Promise<BankAccount>;
   updateBankAccount: (id: string, patch: Partial<Omit<BankAccount, "id" | "userId">>) => Promise<void>;
   deleteBankAccount: (id: string) => Promise<void>;
 
@@ -217,8 +217,9 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       },
 
       async addBankAccount(name, kind, institution, initialBalance) {
-        await bankAccountService.create(userId, { name, kind, institution, initialBalance });
+        const account = await bankAccountService.create(userId, { name, kind, institution, initialBalance });
         setBankAccounts(await bankAccountService.list(userId));
+        return account;
       },
       async updateBankAccount(id, patch) {
         await bankAccountService.update(userId, id, patch);

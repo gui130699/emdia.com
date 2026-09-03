@@ -36,6 +36,9 @@ const SYNCED_ENTITIES = [
   "installmentPlans",
   "installments",
   "invoices",
+  "importBatches",
+  "importMappings",
+  "categorizationRules",
 ] as const;
 
 export async function enqueueSync(

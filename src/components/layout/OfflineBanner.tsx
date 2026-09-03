@@ -20,7 +20,7 @@ export default function OfflineBanner() {
   return (
     <div className="flex items-center justify-center gap-2 bg-warning-500/15 px-4 py-2 text-sm font-medium text-warning-600">
       <WifiOff size={15} />
-      Você está offline. Algumas informações podem não estar atualizadas.
+      Você está offline. As alterações serão sincronizadas quando a conexão voltar.
     </div>
   );
 }
