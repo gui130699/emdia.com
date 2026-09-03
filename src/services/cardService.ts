@@ -16,6 +16,7 @@ export interface CreditCardInput {
   closingDay: number;
   dueDay: number;
   accountId?: string;
+  externalCardAccountId?: string;
   color: string;
   useCustomColor?: boolean;
 }

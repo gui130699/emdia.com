@@ -44,10 +44,10 @@ export default function CardsSummaryTable({ rows }: CardsSummaryTableProps) {
       <ul className="space-y-3 sm:hidden">
         {rows.map(({ card, total, period }) => (
           <li key={card.id} className="rounded-xl border border-ink-100 p-4">
-            <p className="flex items-center gap-2 font-medium text-ink-900">
+            <div className="flex items-center gap-2 font-medium text-ink-900">
               <BankLogo name={card.institution} code={card.institutionCode} logoUrl={card.institutionLogoUrl} size={24} />
               {card.name} •••• {card.lastFourDigits}
-            </p>
+            </div>
             <div className="mt-2 grid grid-cols-2 gap-y-1.5 text-xs">
               <span className="text-ink-400">Limite</span>
               <span className="text-right font-medium text-ink-900">{formatCurrency(card.limit)}</span>

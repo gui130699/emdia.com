@@ -70,7 +70,7 @@ export type RecurringFrequency =
   | "yearly";
 
 export type TransactionSource = "manual" | "import" | "system";
-export type ImportSource = "ofx" | "csv" | "pdf";
+export type ImportSource = "ofx" | "csv" | "xls" | "xlsx" | "qif" | "pdf";
 
 /** What generated this transaction, for reporting/dedup/undo purposes. */
 export type TransactionOriginType =
@@ -84,6 +84,26 @@ export type TransactionOriginType =
 /** Marks a transaction that exists for a structural reason rather than a
  * real income/expense event — kept out of "regular" category reporting. */
 export type TransactionSubtype = "balance_adjustment";
+
+/** Classifies what a card-statement line actually represents — a purchase
+ * behaves completely differently from a payment received, a refund or an
+ * interest charge, and lumping them together as generic "expense" would
+ * corrupt the invoice total and the reports. Only set for cardId-linked,
+ * import-sourced transactions. */
+export type CardEntryType =
+  | "purchase"
+  | "installment"
+  | "credit_card_payment"
+  | "refund"
+  | "interest"
+  | "fee"
+  | "penalty"
+  | "tax"
+  | "cash_advance"
+  | "adjustment"
+  | "credit"
+  | "previous_balance"
+  | "unknown";
 
 export interface Transaction {
   id: string;
@@ -111,6 +131,8 @@ export interface Transaction {
   recurringFrequency?: RecurringFrequency;
   notes?: string;
   transactionSubtype?: TransactionSubtype;
+  /** Only set for imported card-statement lines — see CardEntryType. */
+  cardEntryType?: CardEntryType;
 
   /** Who created this movement. */
   source: TransactionSource;
@@ -191,6 +213,9 @@ export interface CreditCard {
   dueDay: number;
   /** Suggested account for paying this card's invoice. */
   accountId?: string;
+  /** The bank's own card/account identifier (masked in the UI) — lets a
+   * future statement import recognize this is the same card automatically. */
+  externalCardAccountId?: string;
   color: string;
   /** When true, `color` overrides the institution's automatic theme —
    * priority order is: manual color > institution theme > neutral fallback. */
@@ -216,6 +241,15 @@ export interface Invoice {
   closingDate: string;
   dueDate: string;
   total: number;
+  /** The bank's own printed total for this cycle, when a card-statement
+   * import provided one — kept separate from `total` (computed from our
+   * own purchase transactions) so a mismatch can be surfaced instead of
+   * silently trusted. */
+  statementBalance?: number;
+  /** Populated once any payment is recorded — supports partial payments
+   * without losing track of what's still owed. Full payment today always
+   * sets this to 0. */
+  remainingAmount?: number;
   status: InvoiceStatus;
   paidAt?: string;
   paidAmount?: number;
@@ -429,6 +463,33 @@ export interface RecurringBillRule {
   accountId?: string;
   cardId?: string;
   status: RecurringRuleStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation learning
+// ---------------------------------------------------------------------------
+
+export type ReconciliationAliasTargetType = "bill" | "recurringBill" | "category" | "payee";
+export type ConfidenceLevel = "high" | "medium" | "low";
+
+/** Remembers that a bank description like "NET SERVICOS 0012398" means
+ * "Internet" — learned the first time the user manually confirms a match,
+ * then boosts confidence for every future import with the same
+ * description, even across amount/date changes for variable bills. */
+export interface ReconciliationAlias {
+  id: string;
+  userId: string;
+  targetType: ReconciliationAliasTargetType;
+  targetId?: string;
+  recurringRuleId?: string;
+  rawBankDescription: string;
+  normalizedBankDescription: string;
+  institutionCode?: string;
+  accountId?: string;
+  matchCount: number;
+  lastMatchedAt: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -16,7 +16,7 @@ import ImportWizard from "../components/imports/ImportWizard";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
-import { getCurrentInvoicePeriod, transactionsInPeriod } from "../utils/cardInvoice";
+import { getCurrentInvoicePeriod, transactionsInPeriod, signedCardAmount } from "../utils/cardInvoice";
 import { categoryBreakdown } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
 import { formatDate, formatDateObj } from "../utils/date";
@@ -47,7 +47,7 @@ export default function Cards() {
     return creditCards.map((card) => {
       const period = getCurrentInvoicePeriod(card);
       const purchases = transactionsInPeriod(transactions, card.id, period);
-      const total = purchases.reduce((sum, t) => sum + t.amount, 0);
+      const total = purchases.reduce((sum, t) => sum + signedCardAmount(t), 0);
       const record = invoices.find((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey);
       const paid = record?.status === "paid";
       return { card, period, purchases, total: paid ? record!.total : total, paid, invoiceId: record?.id };
@@ -128,14 +128,12 @@ export default function Cards() {
             >
               <Plus size={16} /> Adicionar cartão
             </button>
-            {creditCards.length > 0 && (
-              <button
-                onClick={() => setImportOpen(true)}
-                className="flex items-center gap-1.5 rounded-lg border border-ink-100 bg-surface px-3.5 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50"
-              >
-                <Upload size={16} /> Importar fatura
-              </button>
-            )}
+            <button
+              onClick={() => setImportOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-ink-100 bg-surface px-3.5 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50"
+            >
+              <Upload size={16} /> Importar fatura
+            </button>
           </>
         }
       />
@@ -298,12 +296,7 @@ export default function Cards() {
         initial={editingCard}
       />
 
-      <ImportWizard
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        mode="card"
-        fixedCardId={selectedCard?.id}
-      />
+      <ImportWizard open={importOpen} onClose={() => setImportOpen(false)} mode="card" />
 
       <InvoicePaymentModal
         card={payingInvoice ? (activeInvoice?.card ?? null) : null}

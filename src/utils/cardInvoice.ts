@@ -41,3 +41,17 @@ export function transactionsInPeriod(transactions: Transaction[], cardId: string
     return date >= period.cycleStart && date <= period.cycleEnd;
   });
 }
+
+/** A refund/credit/payment-received line reduces what's owed on the
+ * invoice — summing every card transaction as a flat positive would count
+ * a refund as another purchase instead of cancelling one out. */
+export function signedCardAmount(t: Transaction): number {
+  if (t.cardEntryType === "refund" || t.cardEntryType === "credit" || t.cardEntryType === "credit_card_payment") {
+    return -t.amount;
+  }
+  return t.amount;
+}
+
+export function invoiceTotalForPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod): number {
+  return transactionsInPeriod(transactions, cardId, period).reduce((sum, t) => sum + signedCardAmount(t), 0);
+}

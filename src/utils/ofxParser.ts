@@ -11,7 +11,14 @@ export interface OfxTransaction {
 
 export interface ParsedOfx {
   isCreditCard: boolean;
+  /** BANKID when present (bank accounts), falling back to <FI><FID> (the
+   * signon block's institution id) — credit-card statements often carry
+   * only the latter, e.g. Nubank sends FID=260 with no BANKID at all. */
   bankId?: string;
+  /** The signon block's <ORG> — a regulatory/legal name (e.g. "NU
+   * PAGAMENTOS S.A.") used as a secondary identification signal when the
+   * numeric id alone doesn't resolve to a known institution. */
+  org?: string;
   branchId?: string;
   accountId?: string;
   accountType?: string;
@@ -63,6 +70,10 @@ export function parseOfx(raw: string): ParsedOfx {
   const isCreditCard = !bankAcct && !!ccAcct;
   const acctNode = bankAcct ?? ccAcct;
 
+  const fiNode = doc.querySelector("SONRS FI") ?? doc.querySelector("FI");
+  const fid = text(fiNode, "FID");
+  const org = text(fiNode, "ORG");
+
   const ledgerBal = doc.querySelector("LEDGERBAL");
   const balanceAmount = text(ledgerBal, "BALAMT");
 
@@ -82,7 +93,8 @@ export function parseOfx(raw: string): ParsedOfx {
 
   return {
     isCreditCard,
-    bankId: text(acctNode, "BANKID"),
+    bankId: text(acctNode, "BANKID") ?? fid,
+    org,
     branchId: text(acctNode, "BRANCHID"),
     accountId: text(acctNode, "ACCTID"),
     accountType: text(acctNode, "ACCTTYPE"),

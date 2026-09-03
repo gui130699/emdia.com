@@ -5,15 +5,18 @@ import { accountService } from "./accountService";
 import { invoiceService } from "./invoiceService";
 import { installmentService } from "./installmentService";
 import { categorizationRuleService } from "./categorizationRuleService";
+import { reconciliationAliasService } from "./reconciliationAliasService";
 import { normalizeDescription } from "../utils/normalizeDescription";
 import { fingerprint } from "../utils/fingerprint";
 import { parseOfx, type ParsedOfx } from "../utils/ofxParser";
 import { parseCsv, parseCsvAmount, parseCsvDate } from "../utils/csvParser";
-import { getCurrentInvoicePeriod, transactionsInPeriod, type InvoicePeriod } from "../utils/cardInvoice";
+import { getCurrentInvoicePeriod, invoiceTotalForPeriod, type InvoicePeriod } from "../utils/cardInvoice";
 import { FALLBACK_INSTITUTIONS } from "../constants/institutions";
 import type {
   AccountBill,
+  CardEntryType,
   Category,
+  ConfidenceLevel,
   CreditCard,
   ImportBatch,
   ImportMapping,
@@ -22,12 +25,62 @@ import type {
   Installment,
   InstallmentPlan,
   Invoice,
+  ReconciliationAlias,
   Transaction,
 } from "../types/finance";
 
 /** Matches an installment pattern like "3/12", "03 / 12" or "PARC 3/10"
  * embedded in a purchase description, e.g. "NOTEBOOK 03/12". */
 const INSTALLMENT_PATTERN = /(\d{1,2})\s*\/\s*(\d{1,2})\b/;
+
+/** Classifies a card-statement line by what it actually represents — a
+ * purchase, a payment received, a refund, a financial charge — so it never
+ * gets lumped into the invoice total as a generic expense. Order matters:
+ * more specific patterns are checked first. */
+export function classifyCardEntry(description: string, isCreditEntry: boolean, hasInstallmentPattern: boolean): CardEntryType {
+  const normalized = normalizeDescription(description);
+  if (/saldo.*anterior|valor pendente.*anterior|pendente do mes anterior/.test(normalized)) return "previous_balance";
+  if (/\bjuros\b/.test(normalized)) return "interest";
+  if (/\biof\b/.test(normalized)) return "tax";
+  if (/\bmulta\b/.test(normalized)) return "penalty";
+  if (/estorno/.test(normalized)) return "refund";
+  if (/saque|adiantamento/.test(normalized)) return "cash_advance";
+  if (isCreditEntry && /pagamento|pgto/.test(normalized)) return "credit_card_payment";
+  if (hasInstallmentPattern) return "installment";
+  if (isCreditEntry) return "credit";
+  return "purchase";
+}
+
+function confidenceLevelFor(score: number): ConfidenceLevel {
+  if (score >= 90) return "high";
+  if (score >= 70) return "medium";
+  return "low";
+}
+
+/** Scores how likely a bank line is to be the payment for a given pending
+ * bill — amount match matters most, a learned alias is a very strong
+ * signal on its own (handles variable bills whose amount changes monthly),
+ * word overlap and due-date proximity are lighter signals. */
+function scoreBillMatch(
+  bill: AccountBill,
+  rawAmount: number,
+  normalizedDescription: string,
+  alias?: ReconciliationAlias
+): number {
+  let score = 0;
+  const amountDiff = Math.abs(bill.amount - rawAmount);
+  if (amountDiff < 0.01) score += 50;
+  else if (bill.amount > 0 && amountDiff / bill.amount < 0.2) score += 15;
+
+  if (alias && alias.targetType === "bill" && alias.targetId === bill.id) {
+    score += 40;
+  } else {
+    const billWords = normalizeDescription(bill.description).split(" ").filter((w) => w.length > 2);
+    if (billWords.some((w) => normalizedDescription.includes(w))) score += 15;
+  }
+
+  return Math.min(score, 100);
+}
 
 const batchStore = createRepository<ImportBatch>("importBatches");
 const mappingStore = createRepository<ImportMapping>("importMappings");
@@ -44,6 +97,10 @@ export interface RawImportRow {
   type: "income" | "expense";
   externalIdHint?: string; // e.g. OFX FITID, or a mapped CSV id column
   looksLikePaymentOrRefund?: boolean;
+  /** The original statement sign, preserved separately from `type` (which
+   * is forced to "expense" for every card row so invoice math treats it
+   * consistently) — needed to tell a purchase from a payment/refund/credit. */
+  isCreditEntry?: boolean;
 }
 
 export interface ImportPreviewRow {
@@ -69,7 +126,12 @@ export interface ImportPreviewRow {
     installmentCount?: number;
     installmentTotalAmount?: number;
     confirmed: boolean;
+    confidenceScore?: number;
+    confidenceLevel?: ConfidenceLevel;
+    ambiguous?: boolean;
   };
+  /** Only set for card imports — see CardEntryType. */
+  cardEntryType?: CardEntryType;
   /** Set when the description matches an "N/M" installment pattern. If it
    * already lines up with an existing plan's installment, the row is a
    * duplicate (that parcela already has its own transaction) — otherwise
@@ -111,9 +173,24 @@ export interface ImportContext {
 // OFX / CSV adapters
 // ---------------------------------------------------------------------------
 
-export function findInstitutionByOfxBankId(bankId?: string) {
-  if (!bankId) return undefined;
-  return FALLBACK_INSTITUTIONS.find((i) => i.code === bankId || i.ispb === bankId);
+/** Tries every signal the OFX file offers, in order of reliability: the
+ * numeric BANKID/FID first, then ISPB, then a normalized match against the
+ * signon block's <ORG> (a legal name like "NU PAGAMENTOS S.A."). A single
+ * BANKID lookup misses cases like Nubank's card statements, which only
+ * carry FID/ORG and no BANKID at all. */
+export function findInstitutionByOfxBankId(bankId?: string, org?: string) {
+  if (bankId) {
+    const byId = FALLBACK_INSTITUTIONS.find((i) => i.code === bankId || i.ispb === bankId);
+    if (byId) return byId;
+  }
+  if (org) {
+    const normalizedOrg = normalizeDescription(org);
+    const byOrg = FALLBACK_INSTITUTIONS.find(
+      (i) => normalizedOrg.includes(normalizeDescription(i.name)) || normalizedOrg.includes(normalizeDescription(i.fullName))
+    );
+    if (byOrg) return byOrg;
+  }
+  return undefined;
 }
 
 export function ofxToRawRows(ofx: ParsedOfx): RawImportRow[] {
@@ -130,6 +207,7 @@ export function ofxToRawRows(ofx: ParsedOfx): RawImportRow[] {
       type: ofx.isCreditCard ? "expense" : isCredit ? "income" : "expense",
       externalIdHint: t.fitId ? `ofx:${t.fitId}` : undefined,
       looksLikePaymentOrRefund,
+      isCreditEntry: isCredit,
     };
   });
 }
@@ -210,6 +288,7 @@ export function csvRowsToRawRows(rows: string[][], mapping: CsvColumnMapping, he
       amount,
       type,
       externalIdHint: idIdx >= 0 && row[idIdx] ? `csv:${row[idIdx].trim()}` : undefined,
+      isCreditEntry: type === "income",
     });
   }
   return result;
@@ -256,7 +335,7 @@ async function classifyRows(
         .filter((c) => c.type === "credito")
         .map((card) => {
           const period = getCurrentInvoicePeriod(card);
-          const total = transactionsInPeriod(ctx.existingTransactions, card.id, period).reduce((sum, t) => sum + t.amount, 0);
+          const total = invoiceTotalForPeriod(ctx.existingTransactions, card.id, period);
           const alreadyPaid = ctx.invoices.some((inv) => inv.cardId === card.id && inv.periodKey === period.periodKey && inv.status === "paid");
           return { card, period, total, alreadyPaid };
         })
@@ -275,26 +354,56 @@ async function classifyRows(
     let statusReason: string | undefined;
     let suggestion: ImportPreviewRow["suggestion"];
 
+    // Card-side classification runs first — a payment/refund/interest/tax
+    // line should never be evaluated as "maybe this is a bill" or counted
+    // as a plain purchase.
+    let cardEntryType: CardEntryType | undefined;
+    if (ctx.target.cardId) {
+      const hasPattern = INSTALLMENT_PATTERN.test(raw.description);
+      cardEntryType = classifyCardEntry(raw.description, !!raw.isCreditEntry, hasPattern);
+    }
+
     if (existingExternalIds.has(externalId) || seenInThisBatch.has(externalId)) {
       status = "duplicate";
       statusReason = "Já importada anteriormente.";
+    } else if (cardEntryType && cardEntryType !== "purchase" && cardEntryType !== "installment") {
+      status = "needsReview";
+      const reasonByType: Partial<Record<CardEntryType, string>> = {
+        credit_card_payment: "Parece ser um pagamento recebido na fatura — não deve ser importado como compra.",
+        refund: "Parece ser um estorno — reduz o total da fatura em vez de somar.",
+        interest: "Parece ser um encargo de juros por atraso.",
+        tax: "Parece ser IOF cobrado na fatura.",
+        penalty: "Parece ser uma multa por atraso.",
+        cash_advance: "Parece ser um saque/adiantamento.",
+        previous_balance: "Parece ser o saldo pendente do mês anterior — não é uma compra nova.",
+        credit: "Parece ser um crédito na fatura.",
+      };
+      statusReason = reasonByType[cardEntryType] ?? "Verifique este lançamento antes de importar.";
     } else if (raw.looksLikePaymentOrRefund) {
       status = "needsReview";
       statusReason = "Parece ser um pagamento ou estorno de fatura — verifique antes de importar como compra.";
     } else if (raw.type === "expense" && ctx.target.accountId) {
-      const match = unpaidBills.find(
-        (b) =>
-          Math.abs(b.amount - raw.amount) < 0.01 &&
-          (normalizedDescription.includes(normalizeDescription(b.description).split(" ")[0]) ||
-            normalizeDescription(b.description).includes(normalizedDescription.split(" ")[0]))
-      );
-      if (match) {
+      const alias = await reconciliationAliasService.findForDescription(ctx.userId, raw.description);
+      const scored = unpaidBills
+        .map((b) => ({ bill: b, score: scoreBillMatch(b, raw.amount, normalizedDescription, alias) }))
+        .filter((s) => s.score >= 70)
+        .sort((a, b) => b.score - a.score);
+
+      if (scored.length > 0) {
+        const best = scored[0];
+        const ambiguous = scored.length > 1 && scored[1].score >= best.score - 5 && scored[1].bill.id !== best.bill.id;
+        const level = confidenceLevelFor(best.score);
         status = "needsReview";
         suggestion = {
           kind: "bill",
-          billId: match.id,
-          label: `Este lançamento pode corresponder à conta "${match.description}".`,
-          confirmed: true,
+          billId: best.bill.id,
+          label: ambiguous
+            ? `Encontramos mais de uma conta parecida (ex: "${best.bill.description}") — confirme antes de vincular.`
+            : `Este lançamento pode corresponder à conta "${best.bill.description}".`,
+          confirmed: level === "high" && !ambiguous,
+          confidenceScore: best.score,
+          confidenceLevel: level,
+          ambiguous,
         };
       }
     }
@@ -308,13 +417,17 @@ async function classifyRows(
             normalizedDescription.includes("pagamento"))
       );
       if (invoiceMatch) {
+        const exactAmount = Math.abs(invoiceMatch.total - raw.amount) < 0.02;
+        const score = (exactAmount ? 60 : 30) + (normalizedDescription.includes("fatura") ? 20 : 0) + 20;
         status = "needsReview";
         suggestion = {
           kind: "invoice",
           invoiceCardId: invoiceMatch.card.id,
           invoicePeriod: invoiceMatch.period,
           label: `Este lançamento pode ser o pagamento da fatura do cartão "${invoiceMatch.card.name}".`,
-          confirmed: true,
+          confirmed: score >= 90,
+          confidenceScore: score,
+          confidenceLevel: confidenceLevelFor(score),
         };
       }
     }
@@ -394,9 +507,12 @@ async function classifyRows(
       statusReason,
       categoryId,
       externalId,
-      selected: status === "valid" || (status === "needsReview" && (suggestion?.kind === "bill" || suggestion?.kind === "invoice")),
+      selected:
+        status === "valid" ||
+        ((suggestion?.kind === "bill" || suggestion?.kind === "invoice") && suggestion.confirmed),
       suggestion,
       installmentMatch,
+      cardEntryType,
     });
   }
 
@@ -408,7 +524,7 @@ export async function buildOfxPreview(
   fileName: string,
   ofx: ParsedOfx
 ): Promise<ImportPreview> {
-  const institution = findInstitutionByOfxBankId(ofx.bankId);
+  const institution = findInstitutionByOfxBankId(ofx.bankId, ofx.org);
   const rawRows = ofxToRawRows(ofx);
   const rows = await classifyRows(ctx, "ofx", rawRows);
   const dates = rawRows.map((r) => r.date).sort();
@@ -502,6 +618,7 @@ export const importService = {
           paidAccountId: target.accountId,
           paymentTransactionId: transaction.id,
         });
+        await reconciliationAliasService.learn(userId, row.rawDescription, "bill", row.suggestion.billId);
         newRecords++;
         continue;
       }
@@ -598,6 +715,7 @@ export const importService = {
         categoryId: row.categoryId || "",
         accountId: target.cardId ? "" : target.accountId ?? "",
         cardId: target.cardId,
+        cardEntryType: row.cardEntryType,
         paymentMethod: target.cardId ? "credito" : row.type === "income" ? "pix" : "debito",
         recurring: false,
         source: "import",

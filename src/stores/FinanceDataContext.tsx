@@ -122,7 +122,7 @@ interface FinanceDataValue {
   payBill: (id: string, payment: BillPaymentInput) => Promise<OperationResult>;
   reopenBill: (id: string) => Promise<OperationResult>;
 
-  addCard: (input: CreditCardInput) => Promise<void>;
+  addCard: (input: CreditCardInput) => Promise<CreditCard>;
   updateCard: (id: string, input: Partial<CreditCardInput>) => Promise<void>;
   /** Refuses (with a reason listing what's attached) when the card has any
    * purchases, invoices or installments — use archiveCard instead. */
@@ -480,8 +480,9 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       },
 
       async addCard(input) {
-        await cardService.create(userId, input);
+        const card = await cardService.create(userId, input);
         setCards(await cardService.list(userId));
+        return card;
       },
       async updateCard(id, input) {
         await cardService.update(userId, id, input);

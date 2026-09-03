@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { X, Upload, CheckCircle2, AlertTriangle, Copy, Landmark } from "lucide-react";
+import { X, Upload, CheckCircle2, AlertTriangle, Copy, Landmark, CreditCard as CreditCardIcon } from "lucide-react";
 import Badge from "../ui/Badge";
 import FormField from "../ui/FormField";
 import CurrencyInput from "../ui/CurrencyInput";
@@ -54,7 +54,7 @@ function maskIdentifier(value?: string): string {
   return "••••" + value.slice(-4);
 }
 
-type Step = "select" | "match" | "choose-account" | "mapping" | "preview" | "reconciliation";
+type Step = "select" | "product-uncertain" | "match" | "choose-account" | "choose-card" | "mapping" | "preview" | "reconciliation";
 
 export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixedCardId }: ImportWizardProps) {
   const {
@@ -67,6 +67,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     installmentPlans,
     installments,
     addBankAccount,
+    addCard,
     reconcileAccountBalance,
     createBalanceAdjustment,
     reloadAll,
@@ -92,7 +93,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" } | null>(null);
   const [correctedBalance, setCorrectedBalance] = useState(0);
 
-  // "match" step (OFX account imports only)
+  // "match" step (OFX account/card imports)
   const [detectedCode, setDetectedCode] = useState<string | undefined>();
   const [detectedName, setDetectedName] = useState<string | undefined>();
   const [candidateAccountId, setCandidateAccountId] = useState<string | undefined>();
@@ -104,6 +105,13 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [newAccountKind, setNewAccountKind] = useState<BankAccountKind>("corrente");
   const [newAccountBalance, setNewAccountBalance] = useState(0);
   const [newAccountAsOf, setNewAccountAsOf] = useState(todayISO());
+
+  // Same "match" step, card variant
+  const [candidateCardId, setCandidateCardId] = useState<string | undefined>();
+  const [otherCardId, setOtherCardId] = useState("");
+  const [creatingCard, setCreatingCard] = useState(false);
+  const [newCardName, setNewCardName] = useState("");
+  const [newCardLastFour, setNewCardLastFour] = useState("");
 
   const creditCards = cards.filter((c) => c.type === "credito");
   const target = mode === "card" ? { cardId: targetCardId } : { accountId: targetAccountId };
@@ -121,10 +129,15 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setDetectedCode(undefined);
     setDetectedName(undefined);
     setCandidateAccountId(undefined);
+    setCandidateCardId(undefined);
     setChoosingOther(false);
     setOtherAccountId("");
+    setOtherCardId("");
     setMismatchConfirmed(false);
     setTargetAccountId(fixedAccountId ?? "");
+    setTargetCardId(fixedCardId ?? "");
+    setNewCardName("");
+    setNewCardLastFour("");
     setLoadingLabel("");
   }
 
@@ -133,30 +146,80 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     onClose();
   }
 
-  function buildCtx(accountId?: string, extraAccounts: typeof bankAccounts = []) {
+  function buildCtx(explicitTarget: { accountId?: string; cardId?: string }, extraAccounts: typeof bankAccounts = [], extraCards: typeof cards = []) {
     return {
       userId,
-      target: mode === "card" ? { cardId: targetCardId } : { accountId },
+      target: explicitTarget,
       existingTransactions: transactions,
       bills,
       bankAccounts: [...bankAccounts, ...extraAccounts],
       categories,
-      cards,
+      cards: [...cards, ...extraCards],
       invoices,
       installmentPlans,
       installments,
     };
   }
 
-  async function runOfxPreview(accountId: string, ofx: ParsedOfx, extraAccounts: typeof bankAccounts = []) {
+  async function runOfxPreview(
+    resolvedTarget: { accountId?: string; cardId?: string },
+    ofx: ParsedOfx,
+    extraAccounts: typeof bankAccounts = [],
+    extraCards: typeof cards = []
+  ) {
     setLoadingLabel("Verificando duplicidades...");
-    const ctx = buildCtx(accountId, extraAccounts);
+    const ctx = buildCtx(resolvedTarget, extraAccounts, extraCards);
     const result = await buildOfxPreview(ctx, fileName, ofx);
     setPreview(result);
     setRows(result.rows);
-    setTargetAccountId(accountId);
+    if (resolvedTarget.accountId) setTargetAccountId(resolvedTarget.accountId);
+    if (resolvedTarget.cardId) setTargetCardId(resolvedTarget.cardId);
     setStep("preview");
     setLoadingLabel("");
+  }
+
+  function proceedWithOfx(ofx: ParsedOfx) {
+    const institution = findInstitutionByOfxBankId(ofx.bankId, ofx.org);
+    setDetectedCode(institution?.code ?? ofx.bankId);
+    setDetectedName(institution?.name);
+
+    if (mode === "card") {
+      if (fixedCardId) {
+        void runOfxPreview({ cardId: fixedCardId }, ofx);
+        return;
+      }
+      const exactMatch = ofx.accountId ? cards.find((c) => c.externalCardAccountId === ofx.accountId) : undefined;
+      if (exactMatch) {
+        void runOfxPreview({ cardId: exactMatch.id }, ofx);
+        return;
+      }
+      const byInstitution = (institution?.code ?? ofx.bankId)
+        ? creditCards.filter((c) => c.institutionCode === (institution?.code ?? ofx.bankId))
+        : [];
+      setCandidateCardId(byInstitution.length === 1 ? byInstitution[0].id : undefined);
+      setNewCardName(institution?.name ?? "Novo cartão");
+      setNewCardLastFour(ofx.accountId && /\d{4}$/.test(ofx.accountId) ? ofx.accountId.slice(-4) : "");
+      setLoadingLabel("");
+      setStep("match");
+      return;
+    }
+
+    if (fixedAccountId) {
+      void runOfxPreview({ accountId: fixedAccountId }, ofx);
+      return;
+    }
+    const exactMatch = ofx.accountId ? bankAccounts.find((a) => a.externalBankAccountId === ofx.accountId) : undefined;
+    if (exactMatch) {
+      void runOfxPreview({ accountId: exactMatch.id }, ofx);
+      return;
+    }
+    const byInstitution = (institution?.code ?? ofx.bankId)
+      ? bankAccounts.filter((a) => a.institutionCode === (institution?.code ?? ofx.bankId))
+      : [];
+    setCandidateAccountId(byInstitution.length === 1 ? byInstitution[0].id : undefined);
+    setNewAccountName(institution?.name ?? "Nova conta");
+    setLoadingLabel("");
+    setStep("match");
   }
 
   async function handleFile(file: File) {
@@ -166,54 +229,31 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       const text = await file.text();
       const isOfx = /\.ofx$/i.test(file.name);
 
-      if (mode === "card") {
-        setLoadingLabel("Analisando arquivo...");
-        if (isOfx) {
-          const ofx = parseOfxFile(text);
-          setLastOfx(ofx);
-          await runOfxPreview(targetCardId, ofx);
-        } else {
-          await handleCsvFile(text);
-        }
+      if (!isOfx) {
+        await handleCsvFile(text);
         return;
       }
 
-      if (isOfx) {
-        setLoadingLabel("Analisando arquivo...");
-        const ofx = parseOfxFile(text);
-        setLastOfx(ofx);
+      setLoadingLabel("Analisando arquivo...");
+      const ofx = parseOfxFile(text);
+      setLastOfx(ofx);
 
-        if (fixedAccountId) {
-          await runOfxPreview(fixedAccountId, ofx);
-          return;
-        }
-
-        const institution = findInstitutionByOfxBankId(ofx.bankId);
-        setDetectedCode(institution?.code ?? ofx.bankId);
-        setDetectedName(institution?.name);
-
-        const exactMatch = ofx.accountId
-          ? bankAccounts.find((a) => a.externalBankAccountId === ofx.accountId)
-          : undefined;
-        if (exactMatch) {
-          await runOfxPreview(exactMatch.id, ofx);
-          return;
-        }
-
-        const byInstitution = (institution?.code ?? ofx.bankId)
-          ? bankAccounts.filter((a) => a.institutionCode === (institution?.code ?? ofx.bankId))
-          : [];
-        setCandidateAccountId(byInstitution.length === 1 ? byInstitution[0].id : undefined);
-        setNewAccountName(institution?.name ?? "Nova conta");
+      const expectsCard = mode === "card";
+      if (ofx.isCreditCard !== expectsCard) {
         setLoadingLabel("");
-        setStep("match");
-      } else {
-        await handleCsvFile(text);
+        setStep("product-uncertain");
+        return;
       }
+
+      proceedWithOfx(ofx);
     } catch (err) {
       setLoadingLabel("");
       show(err instanceof Error ? err.message : "Não foi possível ler este arquivo.", "error");
     }
+  }
+
+  function confirmProductAnyway() {
+    if (lastOfx) proceedWithOfx(lastOfx);
   }
 
   async function handleCsvFile(text: string) {
@@ -227,6 +267,10 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       setStep("choose-account");
       return;
     }
+    if (mode === "card" && !fixedCardId && !targetCardId) {
+      setStep("choose-card");
+      return;
+    }
 
     if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
       await commitCsvPreview(headers, parsedRows, guess as CsvColumnMapping);
@@ -238,7 +282,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
   async function commitCsvPreview(headers: string[], parsedRows: string[][], m: CsvColumnMapping) {
     setLoadingLabel("Verificando duplicidades...");
-    const ctx = buildCtx(mode === "card" ? undefined : targetAccountId || fixedAccountId);
+    const resolvedTarget = mode === "card" ? { cardId: targetCardId || fixedCardId } : { accountId: targetAccountId || fixedAccountId };
+    const ctx = buildCtx(resolvedTarget);
     const result = await buildCsvPreview(ctx, fileName, headers, parsedRows, m);
     setPreview(result);
     setRows(result.rows);
@@ -259,9 +304,22 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     }
   }
 
+  async function confirmChooseCard() {
+    if (!targetCardId) return;
+    if (csvHeaders.length > 0) {
+      const guess = guessCsvMapping(csvHeaders);
+      if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
+        await commitCsvPreview(csvHeaders, csvRows, guess as CsvColumnMapping);
+      } else {
+        setMapping({ dateColumn: guess.dateColumn ?? "", descriptionColumn: guess.descriptionColumn ?? "", amountColumn: guess.amountColumn });
+        setStep("mapping");
+      }
+    }
+  }
+
   async function handleUseCandidateAccount() {
     if (!candidateAccountId || !lastOfx) return;
-    await runOfxPreview(candidateAccountId, lastOfx);
+    await runOfxPreview({ accountId: candidateAccountId }, lastOfx);
   }
 
   async function handleConfirmOtherAccount() {
@@ -269,7 +327,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     const account = bankAccounts.find((a) => a.id === otherAccountId);
     const mismatched = detectedCode && account?.institutionCode && account.institutionCode !== detectedCode;
     if (mismatched && !mismatchConfirmed) return;
-    await runOfxPreview(otherAccountId, lastOfx);
+    await runOfxPreview({ accountId: otherAccountId }, lastOfx);
   }
 
   async function handleCreateAccountForOfx() {
@@ -285,9 +343,45 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
         { externalBankAccountId: lastOfx.accountId, externalBranchId: lastOfx.branchId }
       );
       show(`Conta "${account.name}" criada.`);
-      await runOfxPreview(account.id, lastOfx, [account]);
+      await runOfxPreview({ accountId: account.id }, lastOfx, [account]);
     } finally {
       setCreatingAccount(false);
+    }
+  }
+
+  async function handleUseCandidateCard() {
+    if (!candidateCardId || !lastOfx) return;
+    await runOfxPreview({ cardId: candidateCardId }, lastOfx);
+  }
+
+  async function handleConfirmOtherCard() {
+    if (!otherCardId || !lastOfx) return;
+    const card = cards.find((c) => c.id === otherCardId);
+    const mismatched = detectedCode && card?.institutionCode && card.institutionCode !== detectedCode;
+    if (mismatched && !mismatchConfirmed) return;
+    await runOfxPreview({ cardId: otherCardId }, lastOfx);
+  }
+
+  async function handleCreateCardForOfx() {
+    if (!lastOfx || !newCardName.trim() || newCardLastFour.length !== 4) return;
+    setCreatingCard(true);
+    try {
+      const card = await addCard({
+        name: newCardName.trim(),
+        institution: detectedName ?? newCardName.trim(),
+        institutionCode: detectedCode,
+        type: "credito",
+        lastFourDigits: newCardLastFour,
+        limit: 0,
+        closingDay: 5,
+        dueDay: 15,
+        color: "#0a6847",
+        externalCardAccountId: lastOfx.accountId,
+      });
+      show(`Cartão "${card.name}" criado. Defina o limite e as datas de fechamento/vencimento em Editar cartão.`);
+      await runOfxPreview({ cardId: card.id }, lastOfx, [], [card]);
+    } finally {
+      setCreatingCard(false);
     }
   }
 
@@ -382,6 +476,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const detectedLabel = detectedName ? `${detectedName}${detectedCode ? ` / código ${detectedCode}` : ""}` : detectedCode;
   const otherAccount = bankAccounts.find((a) => a.id === otherAccountId);
   const mismatch = !!(detectedCode && otherAccount?.institutionCode && otherAccount.institutionCode !== detectedCode);
+  const otherCard = cards.find((c) => c.id === otherCardId);
+  const cardMismatch = !!(detectedCode && otherCard?.institutionCode && otherCard.institutionCode !== detectedCode);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-4" role="dialog" aria-modal="true">
@@ -399,14 +495,10 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
           {step === "select" && (
             <div className="space-y-4">
-              {mode === "card" && (
-                <FormField label="Cartão" htmlFor="target-card">
-                  <select id="target-card" className={inputClass} value={targetCardId} onChange={(e) => setTargetCardId(e.target.value)}>
-                    {creditCards.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name} •••• {c.lastFourDigits}</option>
-                    ))}
-                  </select>
-                </FormField>
+              {mode === "card" && !fixedCardId && (
+                <p className="text-sm text-ink-500">
+                  Selecione o arquivo primeiro — para OFX, identificamos o cartão automaticamente. Para CSV, pediremos o cartão em seguida.
+                </p>
               )}
 
               {mode === "account" && !fixedAccountId && (
@@ -461,7 +553,53 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
             </div>
           )}
 
-          {step === "match" && (
+          {step === "choose-card" && (
+            <div className="space-y-4">
+              <p className="text-sm text-ink-600">
+                Este arquivo CSV não traz identificação do cartão. Selecione a qual cartão ele pertence.
+              </p>
+              {creditCards.length === 0 ? (
+                <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-sm text-warning-700">
+                  Você ainda não possui cartões cadastrados. Cadastre um cartão antes de importar este arquivo.
+                </p>
+              ) : (
+                <FormField label="Cartão" htmlFor="choose-card">
+                  <select id="choose-card" className={inputClass} value={targetCardId} onChange={(e) => setTargetCardId(e.target.value)}>
+                    <option value="">Selecione</option>
+                    {creditCards.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name} •••• {c.lastFourDigits}</option>
+                    ))}
+                  </select>
+                </FormField>
+              )}
+              <button
+                onClick={confirmChooseCard}
+                disabled={!targetCardId}
+                className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                Continuar
+              </button>
+            </div>
+          )}
+
+          {step === "product-uncertain" && (
+            <div className="space-y-4">
+              <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-sm text-warning-700">
+                Este arquivo parece ser {lastOfx?.isCreditCard ? "uma fatura de cartão" : "um extrato de conta"}, mas você está
+                importando pela tela de {mode === "card" ? "Cartões" : "Transações"}. Deseja continuar mesmo assim?
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setStep("select")} className="flex-1 rounded-lg border border-ink-100 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                  Cancelar
+                </button>
+                <button onClick={confirmProductAnyway} className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+                  Continuar mesmo assim
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === "match" && mode === "account" && (
             <div className="space-y-4">
               {detectedLabel && (
                 <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">Banco detectado: {detectedLabel}</p>
@@ -589,6 +727,130 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
             </div>
           )}
 
+          {step === "match" && mode === "card" && (
+            <div className="space-y-4">
+              {detectedLabel && (
+                <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">Banco detectado: {detectedLabel}</p>
+              )}
+
+              {!choosingOther && candidateCardId && (
+                <div className="rounded-xl border border-ink-100 p-4">
+                  <p className="text-sm text-ink-700">
+                    Encontramos um cartão cadastrado compatível: <strong>{cards.find((c) => c.id === candidateCardId)?.name}</strong>
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={handleUseCandidateCard} className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+                      Usar este cartão
+                    </button>
+                    <button onClick={() => setChoosingOther(true)} className="rounded-lg border border-ink-100 px-3 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                      Escolher outro
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!choosingOther && !candidateCardId && (
+                <div className="rounded-xl border border-ink-100 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <CreditCardIcon size={18} className="text-brand-600" />
+                    <p className="text-sm font-semibold text-ink-900">Cartão ainda não cadastrado</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-y-1.5 text-xs text-ink-600">
+                    <span className="text-ink-400">Instituição</span>
+                    <span>{detectedName ?? "Não identificada"}</span>
+                    <span className="text-ink-400">Código</span>
+                    <span>{detectedCode ?? "—"}</span>
+                    <span className="text-ink-400">Identificador</span>
+                    <span>{maskIdentifier(lastOfx?.accountId)}</span>
+                  </div>
+                  <p className="mt-3 text-sm text-ink-600">Cadastrar este cartão no EM DIA?</p>
+
+                  <div className="mt-3 space-y-3 rounded-lg bg-ink-50 p-3">
+                    <FormField label="Nome do cartão">
+                      <input className={inputClass} value={newCardName} onChange={(e) => setNewCardName(e.target.value)} />
+                    </FormField>
+                    <FormField label="Últimos 4 dígitos">
+                      <input
+                        className={inputClass}
+                        maxLength={4}
+                        inputMode="numeric"
+                        value={newCardLastFour}
+                        onChange={(e) => setNewCardLastFour(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                        placeholder="0000"
+                      />
+                    </FormField>
+                    <p className="text-xs text-ink-400">
+                      Limite, dia de fechamento e vencimento não vêm no arquivo — defina-os depois em Editar cartão.
+                    </p>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={handleCreateCardForOfx}
+                      disabled={creatingCard || !newCardName.trim() || newCardLastFour.length !== 4}
+                      className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      Cadastrar cartão
+                    </button>
+                    <button onClick={() => setChoosingOther(true)} className="rounded-lg border border-ink-100 px-3 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                      Selecionar cartão existente
+                    </button>
+                    <button onClick={() => setStep("select")} className="rounded-lg px-3 py-2 text-sm font-medium text-ink-400 hover:bg-ink-50">
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {choosingOther && (
+                <div className="rounded-xl border border-ink-100 p-4">
+                  <FormField label="Cartão" htmlFor="other-card">
+                    <select
+                      id="other-card"
+                      className={inputClass}
+                      value={otherCardId}
+                      onChange={(e) => {
+                        setOtherCardId(e.target.value);
+                        setMismatchConfirmed(false);
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {creditCards.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name} •••• {c.lastFourDigits}</option>
+                      ))}
+                    </select>
+                  </FormField>
+
+                  {cardMismatch && (
+                    <div className="mt-3 space-y-2 rounded-lg bg-warning-500/10 p-3 text-sm text-warning-700">
+                      <p>
+                        A fatura parece ser do {detectedName ?? "banco detectado"}, mas você selecionou o cartão{" "}
+                        {otherCard?.institution ?? otherCard?.name}.
+                      </p>
+                      <label className="flex items-center gap-2 text-xs font-medium">
+                        <input type="checkbox" checked={mismatchConfirmed} onChange={(e) => setMismatchConfirmed(e.target.checked)} />
+                        Tenho certeza, quero continuar mesmo assim.
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={() => setChoosingOther(false)} className="rounded-lg border border-ink-100 px-3 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                      Voltar
+                    </button>
+                    <button
+                      onClick={handleConfirmOtherCard}
+                      disabled={!otherCardId || (cardMismatch && !mismatchConfirmed)}
+                      className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      Confirmar cartão
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {step === "mapping" && (
             <div className="space-y-4">
               <p className="text-sm text-ink-600">
@@ -701,13 +963,21 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                           )}
 
                           {row.suggestion && (
-                            <label className="mt-2 flex items-center gap-2 rounded-lg bg-warning-500/10 px-2.5 py-1.5 text-xs text-warning-700">
+                            <label className="mt-2 flex items-start gap-2 rounded-lg bg-warning-500/10 px-2.5 py-1.5 text-xs text-warning-700">
                               <input
                                 type="checkbox"
+                                className="mt-0.5"
                                 checked={row.suggestion.confirmed}
                                 onChange={(e) => updateRow(row.key, { suggestion: { ...row.suggestion!, confirmed: e.target.checked } })}
                               />
-                              {row.suggestion.label}
+                              <span>
+                                {row.suggestion.label}
+                                {row.suggestion.confidenceLevel && (
+                                  <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning-600">
+                                    ({row.suggestion.confidenceLevel === "high" ? "alta confiança" : row.suggestion.confidenceLevel === "medium" ? "confiança média" : "baixa confiança"})
+                                  </span>
+                                )}
+                              </span>
                             </label>
                           )}
 

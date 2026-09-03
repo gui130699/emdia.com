@@ -13,6 +13,9 @@ import type { ImportBatch } from "../types/finance";
 const FILE_TYPE_LABEL: Record<ImportBatch["fileType"], string> = {
   ofx: "OFX",
   csv: "CSV",
+  xls: "XLS",
+  xlsx: "XLSX",
+  qif: "QIF",
   pdf: "PDF",
 };
 

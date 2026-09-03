@@ -42,6 +42,7 @@ const SYNCED_ENTITIES = [
   "balanceSnapshots",
   "userProfile",
   "recurringBillRules",
+  "reconciliationAliases",
 ] as const;
 
 export async function enqueueSync(

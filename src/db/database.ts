@@ -12,6 +12,7 @@ import type {
   Installment,
   InstallmentPlan,
   Invoice,
+  ReconciliationAlias,
   RecurringBillRule,
   Transaction,
   UserProfile,
@@ -60,6 +61,7 @@ export class EmDiaDatabase extends Dexie {
   balanceSnapshots!: Table<BalanceSnapshot, string>;
   userProfile!: Table<UserProfile, string>;
   recurringBillRules!: Table<RecurringBillRule, string>;
+  reconciliationAliases!: Table<ReconciliationAlias, string>;
   syncQueue!: Table<SyncQueueItem, string>;
 
   constructor(userId: string) {
@@ -89,6 +91,9 @@ export class EmDiaDatabase extends Dexie {
     this.version(4).stores({
       recurringBillRules: "id, status",
       bills: "id, dueDate, status, categoryId, recurringRuleId",
+    });
+    this.version(5).stores({
+      reconciliationAliases: "id, normalizedBankDescription, targetType",
     });
   }
 }
