@@ -117,3 +117,117 @@
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* Launch splash — point, circle draws, check draws, wordmark, slogan. Uses
+   the adaptive --color-surface/--color-ink tokens (never a hardcoded white)
+   so there's no flash in dark mode, and --color-brand-600 so it follows
+   whatever accent color the user picked instead of a hardcoded green. */
+@keyframes splash-draw-circle {
+  from { stroke-dashoffset: 57; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes splash-draw-check {
+  from { stroke-dashoffset: 12; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes splash-text-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes splash-icon-in {
+  0% { opacity: 0; }
+  60% { opacity: 0.5; }
+  100% { opacity: 0; }
+}
+
+.splash-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  transition: opacity 0.3s ease;
+}
+.splash-overlay.splash-fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+.splash-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+.splash-badge {
+  width: 56px;
+  height: 56px;
+  color: var(--color-brand-600);
+}
+.splash-circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 57;
+  stroke-dashoffset: 57;
+  animation: splash-draw-circle 0.7s ease-out 0.15s forwards;
+}
+.splash-check {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 12;
+  stroke-dashoffset: 12;
+  animation: splash-draw-check 0.4s ease-out 0.85s forwards;
+}
+.splash-wordmark {
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-900);
+  opacity: 0;
+  animation: splash-text-in 0.4s ease-out 1.3s forwards;
+}
+.splash-slogan {
+  font-size: 0.8rem;
+  color: var(--color-ink-400);
+  opacity: 0;
+  animation: splash-text-in 0.4s ease-out 1.6s forwards;
+}
+.splash-icon {
+  color: var(--color-brand-600);
+  opacity: 0;
+  animation: splash-icon-in 0.8s ease-out 1.85s forwards;
+}
+
+.splash-reduced .splash-circle,
+.splash-reduced .splash-check {
+  animation: none;
+  stroke-dashoffset: 0;
+}
+.splash-reduced .splash-wordmark,
+.splash-reduced .splash-slogan {
+  animation: none;
+  opacity: 1;
+}
+.splash-reduced .splash-icon {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-circle,
+  .splash-check,
+  .splash-wordmark,
+  .splash-slogan {
+    animation: none !important;
+    opacity: 1 !important;
+    stroke-dashoffset: 0 !important;
+  }
+  .splash-icon {
+    display: none !important;
+  }
+}

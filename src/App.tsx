@@ -4,6 +4,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { ToastProvider } from "./stores/ToastContext";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import AppLayout from "./layouts/AppLayout";
+import SplashScreen from "./components/layout/SplashScreen";
 import Login from "./pages/Login";
 import SignUp from "./pages/SignUp";
 
@@ -29,6 +30,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
+        <SplashScreen />
         <HashRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
