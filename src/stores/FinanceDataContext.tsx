@@ -18,6 +18,7 @@ import { invoiceService } from "../services/invoiceService";
 import { installmentService, type CreateInstallmentPlanInput } from "../services/installmentService";
 import { categorizationRuleService } from "../services/categorizationRuleService";
 import { balanceSnapshotService } from "../services/balanceSnapshotService";
+import { recurringBillRuleService, type RecurringBillRuleInput } from "../services/recurringBillRuleService";
 import { computeAccountBalance, computeTotalBalance } from "../services/balanceService";
 import { generateId } from "../services/localStore";
 import { getCurrentInvoicePeriod, type InvoicePeriod } from "../utils/cardInvoice";
@@ -37,6 +38,7 @@ import type {
   InstallmentPlan,
   Invoice,
   PaymentMethod,
+  RecurringBillRule,
   Transaction,
 } from "../types/finance";
 import type { FinancialInstitution } from "../types/institution";
@@ -78,6 +80,7 @@ interface FinanceDataValue {
   installments: Installment[];
   importBatches: ImportBatch[];
   balanceSnapshots: BalanceSnapshot[];
+  recurringBillRules: RecurringBillRule[];
 
   getAccountBalance: (accountId: string) => number;
   totalBalance: number;
@@ -141,6 +144,13 @@ interface FinanceDataValue {
 
   undoImportBatch: (id: string) => Promise<OperationResult>;
 
+  addRecurringRule: (input: RecurringBillRuleInput) => Promise<void>;
+  updateRecurringRule: (id: string, patch: Partial<RecurringBillRuleInput>, cascadeToFuture: boolean) => Promise<void>;
+  pauseRecurringRule: (id: string, removeFutureUnpaid: boolean) => Promise<void>;
+  reactivateRecurringRule: (id: string) => Promise<void>;
+  endRecurringRule: (id: string, removeFutureUnpaid: boolean) => Promise<void>;
+  deleteRecurringRule: (id: string) => Promise<OperationResult>;
+
   reloadAll: () => Promise<void>;
 }
 
@@ -169,10 +179,15 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
   const [installments, setInstallments] = useState<Installment[]>([]);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
   const [balanceSnapshots, setBalanceSnapshots] = useState<BalanceSnapshot[]>([]);
+  const [recurringBillRules, setRecurringBillRules] = useState<RecurringBillRule[]>([]);
 
   const reloadAll = useCallback(async () => {
     if (!userId) return;
-    const [t, b, c, g, cat, acc, inv, plans, insts, batches, snapshots] = await Promise.all([
+    // Idempotent: only creates occurrences missing from the rolling
+    // window, so this is safe to run on every reload.
+    await recurringBillRuleService.generateForAllActiveRules(userId);
+
+    const [t, b, c, g, cat, acc, inv, plans, insts, batches, snapshots, rules] = await Promise.all([
       transactionService.list(userId),
       accountService.list(userId),
       cardService.list(userId),
@@ -184,6 +199,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       installmentService.listInstallments(userId),
       importService.listBatches(userId),
       balanceSnapshotService.list(userId),
+      recurringBillRuleService.list(userId),
     ]);
     setTransactions(t);
     setBills(b);
@@ -196,6 +212,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
     setInstallments(insts);
     setImportBatches(batches);
     setBalanceSnapshots(snapshots);
+    setRecurringBillRules(rules);
     void categorizationRuleService.seedIfEmpty(userId, cat);
   }, [userId]);
 
@@ -232,6 +249,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       installments,
       importBatches,
       balanceSnapshots,
+      recurringBillRules,
 
       getAccountBalance(accountId) {
         const account = bankAccounts.find((a) => a.id === accountId);
@@ -586,6 +604,40 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         return result;
       },
 
+      async addRecurringRule(input) {
+        await recurringBillRuleService.create(userId, input);
+        await recurringBillRuleService.generateForAllActiveRules(userId);
+        setRecurringBillRules(await recurringBillRuleService.list(userId));
+        setBills(await accountService.list(userId));
+      },
+      async updateRecurringRule(id, patch, cascadeToFuture) {
+        await recurringBillRuleService.update(userId, id, patch, cascadeToFuture, bills);
+        setRecurringBillRules(await recurringBillRuleService.list(userId));
+        setBills(await accountService.list(userId));
+      },
+      async pauseRecurringRule(id, removeFutureUnpaid) {
+        await recurringBillRuleService.pause(userId, id, removeFutureUnpaid, bills);
+        setRecurringBillRules(await recurringBillRuleService.list(userId));
+        setBills(await accountService.list(userId));
+      },
+      async reactivateRecurringRule(id) {
+        await recurringBillRuleService.reactivate(userId, id);
+        await recurringBillRuleService.generateForAllActiveRules(userId);
+        setRecurringBillRules(await recurringBillRuleService.list(userId));
+        setBills(await accountService.list(userId));
+      },
+      async endRecurringRule(id, removeFutureUnpaid) {
+        await recurringBillRuleService.end(userId, id, removeFutureUnpaid, bills);
+        setRecurringBillRules(await recurringBillRuleService.list(userId));
+        setBills(await accountService.list(userId));
+      },
+      async deleteRecurringRule(id) {
+        const result = await recurringBillRuleService.deleteRule(userId, id, bills);
+        setRecurringBillRules(await recurringBillRuleService.list(userId));
+        setBills(await accountService.list(userId));
+        return result;
+      },
+
       reloadAll,
     }),
     [
@@ -602,6 +654,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       installments,
       importBatches,
       balanceSnapshots,
+      recurringBillRules,
       userId,
       reloadAll,
     ]

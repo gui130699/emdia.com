@@ -10,6 +10,7 @@ import AccountDrawer from "../components/accounts/AccountDrawer";
 import BillCalendar from "../components/accounts/BillCalendar";
 import AccountsTable from "../components/accounts/AccountsTable";
 import BillPaymentModal from "../components/accounts/BillPaymentModal";
+import RecurringRulesSection from "../components/accounts/RecurringRulesSection";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
@@ -155,6 +156,8 @@ export default function Accounts() {
         </div>
 
         <BillCalendar bills={bills} />
+
+        <RecurringRulesSection />
       </div>
 
       <AccountDrawer

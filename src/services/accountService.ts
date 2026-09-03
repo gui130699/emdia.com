@@ -11,6 +11,7 @@ export interface AccountBillInput {
   categoryId: string;
   recurring: boolean;
   recurringFrequency?: AccountBill["recurringFrequency"];
+  recurringRuleId?: string;
   paymentMethod?: AccountBill["paymentMethod"];
   accountId?: string;
   notes?: string;

@@ -41,6 +41,7 @@ const SYNCED_ENTITIES = [
   "categorizationRules",
   "balanceSnapshots",
   "userProfile",
+  "recurringBillRules",
 ] as const;
 
 export async function enqueueSync(
