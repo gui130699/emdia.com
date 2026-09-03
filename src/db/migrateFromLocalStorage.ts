@@ -60,7 +60,7 @@ export async function migrateFromLocalStorage(userId: string): Promise<void> {
         institutionFullName: a.institutionFullName as string | undefined,
         institutionIspb: a.institutionIspb as string | undefined,
         institutionLogoUrl: a.institutionLogoUrl as string | undefined,
-        initialBalance: typeof a.initialBalance === "number" ? a.initialBalance : 0,
+        initialBalance: typeof a.initialBalance === "number" ? a.initialBalance : undefined,
         createdAt: String(a.createdAt ?? now),
         updatedAt: String(a.updatedAt ?? a.createdAt ?? now),
       }));

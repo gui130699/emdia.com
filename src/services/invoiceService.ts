@@ -1,5 +1,6 @@
 import { createRepository } from "../db/dexieRepository";
 import { generateId } from "./localStore";
+import { invoicePaymentService } from "./invoicePaymentService";
 import type { Invoice } from "../types/finance";
 import type { InvoicePeriod } from "../utils/cardInvoice";
 
@@ -30,14 +31,31 @@ export const invoiceService = {
     paidAmount: number,
     paidAccountId: string,
     paymentTransactionId: string,
-    id?: string
+    id?: string,
+    source: "manual" | "import" | "reconciliation" = "manual",
+    paymentDate: string = new Date().toISOString().slice(0, 10)
   ): Promise<Invoice> {
     const now = new Date().toISOString();
     const existing = await this.findByPeriod(userId, cardId, period.periodKey);
-    const totalPaid = (existing?.paidAmount ?? 0) + paidAmount;
+    const invoiceId = existing?.id ?? id ?? generateId();
+    await invoicePaymentService.create(userId, {
+      invoiceId,
+      cardId,
+      amount: paidAmount,
+      paymentDate,
+      bankAccountId: paidAccountId,
+      bankTransactionId: paymentTransactionId,
+      source,
+      status: "confirmed",
+    });
+    const payments = await invoicePaymentService.listForInvoice(userId, invoiceId);
+    const totalPaid = payments
+      .filter((payment) => payment.status !== "reversed")
+      .reduce((sum, payment) => sum + payment.amount, 0);
     const remainingAmount = Math.max(0, total - totalPaid);
     const invoice: Invoice = {
-      id: existing?.id ?? id ?? generateId(),
+      ...existing,
+      id: invoiceId,
       userId,
       cardId,
       periodKey: period.periodKey,
@@ -68,32 +86,58 @@ export const invoiceService = {
   async recordStatementSnapshot(
     userId: string,
     cardId: string,
-    period: InvoicePeriod,
-    statementBalance: number,
-    computedTotal: number
+    period: InvoicePeriod | undefined,
+    statement: {
+      statementBalance: number;
+      rawStatementBalance?: number;
+      asOfDate?: string;
+      asOfDateTime?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      importBatchId?: string;
+    },
+    computedTotal: number,
+    composition?: Pick<Invoice, "purchaseTotal" | "installmentTotal" | "chargesTotal" | "previousBalance" | "paymentsTotal" | "creditsTotal">
   ): Promise<Invoice> {
     const now = new Date().toISOString();
-    const existing = await this.findByPeriod(userId, cardId, period.periodKey);
+    const periodKey = period?.periodKey ?? statement.asOfDate?.slice(0, 7) ?? statement.periodEnd?.slice(0, 7) ?? now.slice(0, 7);
+    const existing = await this.findByPeriod(userId, cardId, periodKey);
+    const patch = {
+      total: computedTotal,
+      statementBalance: statement.statementBalance,
+      rawStatementBalance: statement.rawStatementBalance,
+      statementAsOfDateTime: statement.asOfDateTime,
+      periodStart: period?.cycleStart.toISOString().slice(0, 10) ?? statement.periodStart,
+      periodEnd: period?.cycleEnd.toISOString().slice(0, 10) ?? statement.periodEnd,
+      closingDate: period?.cycleEnd.toISOString().slice(0, 10),
+      dueDate: period?.dueDate.toISOString().slice(0, 10),
+      remainingAmount: existing?.status === "paid" || existing?.status === "partial"
+        ? existing.remainingAmount
+        : statement.statementBalance,
+      ...composition,
+      updatedAt: now,
+    };
     if (existing) {
-      await store.update(userId, existing.id, { statementBalance, updatedAt: now });
-      return { ...existing, statementBalance, updatedAt: now };
+      const updated = await store.update(userId, existing.id, patch);
+      return updated as Invoice;
     }
     const today = new Date();
-    const status: Invoice["status"] = today > period.dueDate ? "overdue" : today > period.cycleEnd ? "closed" : "open";
+    const status: Invoice["status"] = period
+      ? today > period.dueDate
+        ? "overdue"
+        : today > period.cycleEnd
+          ? "closed"
+          : "open"
+      : "closed";
     const invoice: Invoice = {
       id: generateId(),
       userId,
       cardId,
-      periodKey: period.periodKey,
-      periodStart: period.cycleStart.toISOString().slice(0, 10),
-      periodEnd: period.cycleEnd.toISOString().slice(0, 10),
-      closingDate: period.cycleEnd.toISOString().slice(0, 10),
-      dueDate: period.dueDate.toISOString().slice(0, 10),
-      total: computedTotal,
-      statementBalance,
+      periodKey,
+      ...patch,
+      importBatchId: statement.importBatchId,
       status,
       createdAt: now,
-      updatedAt: now,
     };
     return store.create(userId, invoice);
   },

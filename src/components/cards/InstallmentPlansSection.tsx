@@ -10,6 +10,7 @@ import { formatDate } from "../../utils/date";
 import type { InstallmentPlan } from "../../types/finance";
 
 const STATUS_CONFIG = {
+  historical: { label: "Anterior", tone: "neutral" as const },
   scheduled: { label: "Agendada", tone: "neutral" as const },
   billed: { label: "Na fatura", tone: "warning" as const },
   paid: { label: "Paga", tone: "success" as const },
@@ -45,8 +46,9 @@ export default function InstallmentPlansSection() {
           .filter((i) => i.installmentPlanId === plan.id)
           .sort((a, b) => a.number - b.number);
         const paidCount = planInstallments.filter((i) => i.status === "paid").length;
-        const remaining = planInstallments.filter((i) => i.status !== "paid");
-        const nextInstallment = remaining[0];
+        const historicalCount = planInstallments.filter((i) => i.status === "historical").length;
+        const remaining = planInstallments.filter((i) => i.status !== "paid" && i.status !== "historical");
+        const nextInstallment = remaining.find((i) => i.status === "scheduled") ?? remaining[0];
         const totalRemaining = remaining.reduce((sum, i) => sum + i.amount, 0);
         const installmentAmount = planInstallments[0]?.amount ?? plan.totalAmount / plan.installmentCount;
         const isOpen = expanded === plan.id;
@@ -65,7 +67,9 @@ export default function InstallmentPlansSection() {
               </div>
               <div className="flex shrink-0 items-center gap-3">
                 <div className="text-right text-xs">
-                  <p className="font-semibold text-ink-900">{paidCount}/{plan.installmentCount} pagas</p>
+                  <p className="font-semibold text-ink-900">
+                    Parcela atual {plan.currentObservedNumber ?? plan.trackingStartNumber ?? nextInstallment?.number ?? 1}/{plan.installmentCount}
+                  </p>
                   <p className="text-ink-400">Restante {formatCurrency(totalRemaining)}</p>
                 </div>
                 {isOpen ? <ChevronUp size={16} className="text-ink-400" /> : <ChevronDown size={16} className="text-ink-400" />}
@@ -74,6 +78,10 @@ export default function InstallmentPlansSection() {
 
             {isOpen && (
               <div className="border-t border-ink-100 p-4">
+                <p className="mb-3 text-xs text-ink-500">
+                  {historicalCount} anterior(es) · {remaining.length} restante(s)
+                  {paidCount > 0 ? ` · ${paidCount} paga(s) confirmada(s)` : ""}
+                </p>
                 {nextInstallment && (
                   <p className="mb-3 text-xs text-ink-500">
                     Próxima parcela: {nextInstallment.number}/{plan.installmentCount} · {formatDate(nextInstallment.dueDate)} · {formatCurrency(nextInstallment.amount)}

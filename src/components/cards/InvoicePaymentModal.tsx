@@ -36,7 +36,7 @@ export default function InvoicePaymentModal({ card, period, total, remainingAmou
 
   useEffect(() => {
     if (!open) return;
-    setAccountId(card?.accountId ?? bankAccounts[0]?.id ?? "");
+    setAccountId(card?.accountId ?? "");
     setDate(todayISO());
     setAmount(owed);
   }, [open, card, bankAccounts, owed]);

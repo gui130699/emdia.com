@@ -46,7 +46,7 @@ export default function Dashboard() {
   const { onOpenMenu } = useLayoutContext();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const { transactions, bills, goals, categories, loading, totalBalance, bankAccounts } = useFinanceData();
+  const { transactions, bills, goals, categories, loading, totalBalance, unknownBalanceAccountCount, bankAccounts } = useFinanceData();
 
   const [monthsBack, setMonthsBack] = useState(6);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -75,7 +75,9 @@ export default function Dashboard() {
 
   const accountsWithDiscrepancy = bankAccounts.filter((a) => a.reconciliationStatus === "discrepancy").length;
   const accountsConferred = bankAccounts.filter((a) => a.reconciliationStatus === "conferred").length;
-  const conferenceHint =
+  const conferenceHint = unknownBalanceAccountCount > 0
+    ? `${unknownBalanceAccountCount} conta(s) sem saldo informado`
+    :
     accountsWithDiscrepancy > 0
       ? `${accountsWithDiscrepancy} conta(s) com diferença encontrada`
       : accountsConferred > 0
@@ -157,10 +159,10 @@ export default function Dashboard() {
         <div className="space-y-3 md:hidden">
           <div className="rounded-2xl bg-linear-to-br from-petrol-800 to-brand-900 p-5 text-white">
             <div className="flex items-center gap-1.5 text-sm text-white/70">
-              <Wallet size={16} /> Saldo total
+              <Wallet size={16} /> {unknownBalanceAccountCount > 0 ? "Saldo conhecido" : "Saldo total"}
             </div>
             <div className="mt-2 flex items-center justify-between gap-3">
-              <span className="text-2xl font-bold">{formatCurrency(totalBalance)}</span>
+              <span className="text-2xl font-bold">{totalBalance === undefined ? "Não informado" : formatCurrency(totalBalance)}</span>
               {balanceSparkline.length > 1 && <MiniSparkline data={balanceSparkline} />}
             </div>
             {lastMonthTotals.income > 0 && (
@@ -211,10 +213,10 @@ export default function Dashboard() {
         <div className="hidden gap-4 md:grid md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard
             icon={Wallet}
-            label="Saldo total"
-            value={formatCurrency(totalBalance)}
+            label={unknownBalanceAccountCount > 0 ? "Saldo conhecido" : "Saldo total"}
+            value={totalBalance === undefined ? "Não informado" : formatCurrency(totalBalance)}
             hint={conferenceHint}
-            hintClassName={accountsWithDiscrepancy > 0 ? "text-warning-600" : "text-success-600"}
+            hintClassName={accountsWithDiscrepancy > 0 || unknownBalanceAccountCount > 0 ? "text-warning-600" : "text-success-600"}
           />
           <SummaryCard
             icon={TrendingUp}

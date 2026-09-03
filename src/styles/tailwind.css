@@ -108,6 +108,18 @@
 [data-density="compact"] .space-y-4 > * + * {
   margin-top: 0.65rem;
 }
+[data-density="comfortable"] .p-5 {
+  padding: 1.5rem;
+}
+[data-density="comfortable"] .p-4 {
+  padding: 1.25rem;
+}
+[data-density="comfortable"] .gap-4 {
+  gap: 1.25rem;
+}
+[data-density="comfortable"] .space-y-4 > * + * {
+  margin-top: 1.25rem;
+}
 
 /* Hidden-but-functional horizontal scroll, for chip rows and card carousels. */
 .no-scrollbar {

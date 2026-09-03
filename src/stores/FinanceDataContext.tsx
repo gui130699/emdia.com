@@ -15,13 +15,19 @@ import { goalService, type FinancialGoalInput } from "../services/goalService";
 import { categoryService, type CategoryInput } from "../services/categoryService";
 import { bankAccountService } from "../services/bankAccountService";
 import { invoiceService } from "../services/invoiceService";
+import { invoicePaymentService } from "../services/invoicePaymentService";
 import { installmentService, type CreateInstallmentPlanInput } from "../services/installmentService";
 import { categorizationRuleService } from "../services/categorizationRuleService";
 import { balanceSnapshotService } from "../services/balanceSnapshotService";
 import { recurringBillRuleService, type RecurringBillRuleInput } from "../services/recurringBillRuleService";
-import { computeAccountBalance, computeTotalBalance } from "../services/balanceService";
+import { computeAccountBalance, computeTotalBalance, countUnknownAccountBalances } from "../services/balanceService";
 import { generateId } from "../services/localStore";
-import { getCurrentInvoicePeriod, invoiceTotalForPeriod, type InvoicePeriod } from "../utils/cardInvoice";
+import {
+  cardInvoiceComposition,
+  getCurrentInvoicePeriod,
+  transactionsInPeriod,
+  type InvoicePeriod,
+} from "../utils/cardInvoice";
 import { migrateFromLocalStorage } from "../db/migrateFromLocalStorage";
 import { startSyncEngine, subscribeSyncStatus, type AggregateSyncStatus } from "../db/syncService";
 import { importService } from "../services/importService";
@@ -37,6 +43,7 @@ import type {
   Installment,
   InstallmentPlan,
   Invoice,
+  InvoicePayment,
   PaymentMethod,
   RecurringBillRule,
   Transaction,
@@ -80,14 +87,16 @@ interface FinanceDataValue {
   categories: Category[];
   bankAccounts: BankAccount[];
   invoices: Invoice[];
+  invoicePayments: InvoicePayment[];
   installmentPlans: InstallmentPlan[];
   installments: Installment[];
   importBatches: ImportBatch[];
   balanceSnapshots: BalanceSnapshot[];
   recurringBillRules: RecurringBillRule[];
 
-  getAccountBalance: (accountId: string) => number;
-  totalBalance: number;
+  getAccountBalance: (accountId: string) => number | undefined;
+  totalBalance: number | undefined;
+  unknownBalanceAccountCount: number;
   getCategoryUsageCount: (categoryId: string) => number;
 
   addBankAccount: (
@@ -96,7 +105,7 @@ interface FinanceDataValue {
     institution?: FinancialInstitution,
     initialBalance?: number,
     balanceAsOfDate?: string,
-    externalIds?: { externalBankAccountId?: string; externalBranchId?: string }
+    externalIds?: { externalBankAccountId?: string; externalBranchId?: string; currency?: string }
   ) => Promise<BankAccount>;
   updateBankAccount: (id: string, patch: Partial<Omit<BankAccount, "id" | "userId">>) => Promise<void>;
   deleteBankAccount: (id: string) => Promise<void>;
@@ -110,8 +119,14 @@ interface FinanceDataValue {
     reportedBalance: number,
     asOfDate: string,
     source: BalanceSnapshot["source"],
-    importBatchId?: string
-  ) => Promise<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" | "initial_reference" }>;
+    importBatchId?: string,
+    metadata?: {
+      availableBalance?: number;
+      asOfDateTime?: string;
+      institutionCode?: string;
+      externalBankAccountId?: string;
+    }
+  ) => Promise<{ calculated?: number; reported: number; difference?: number; status: "conferred" | "discrepancy" | "initial_reference" }>;
   createBalanceAdjustment: (accountId: string, amount: number, date: string, notes?: string) => Promise<void>;
 
   /** Records the bank's own reported statement position for a card's
@@ -123,7 +138,15 @@ interface FinanceDataValue {
    * (fechamento/vencimento not informed). */
   recordCardStatement: (
     cardId: string,
-    statementBalance: number
+    statementBalance: number,
+    metadata?: {
+      rawStatementBalance?: number;
+      asOfDate?: string;
+      asOfDateTime?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      importBatchId?: string;
+    }
   ) => Promise<{ computedTotal: number; statementBalance: number; difference: number } | undefined>;
 
   addTransaction: (input: TransactionInput) => Promise<void>;
@@ -191,6 +214,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [invoicePayments, setInvoicePayments] = useState<InvoicePayment[]>([]);
   const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlan[]>([]);
   const [installments, setInstallments] = useState<Installment[]>([]);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
@@ -203,7 +227,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
     // window, so this is safe to run on every reload.
     await recurringBillRuleService.generateForAllActiveRules(userId);
 
-    const [t, b, c, g, cat, acc, inv, plans, insts, batches, snapshots, rules] = await Promise.all([
+    const [t, b, c, g, cat, acc, inv, payments, plans, insts, batches, snapshots, rules] = await Promise.all([
       transactionService.list(userId),
       accountService.list(userId),
       cardService.list(userId),
@@ -211,6 +235,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       categoryService.list(userId),
       bankAccountService.list(userId),
       invoiceService.list(userId),
+      invoicePaymentService.list(userId),
       installmentService.listPlans(userId),
       installmentService.listInstallments(userId),
       importService.listBatches(userId),
@@ -224,6 +249,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
     setCategories(cat);
     setBankAccounts(acc);
     setInvoices(inv);
+    setInvoicePayments(payments);
     setInstallmentPlans(plans);
     setInstallments(insts);
     setImportBatches(batches);
@@ -242,7 +268,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       .then(reloadAll)
       .finally(() => setLoading(false));
 
-    const stopEngine = startSyncEngine(userId);
+    const stopEngine = startSyncEngine(userId, reloadAll);
     const unsubscribe = subscribeSyncStatus(setSyncStatus);
     return () => {
       stopEngine();
@@ -261,6 +287,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       categories,
       bankAccounts,
       invoices,
+      invoicePayments,
       installmentPlans,
       installments,
       importBatches,
@@ -269,9 +296,10 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
 
       getAccountBalance(accountId) {
         const account = bankAccounts.find((a) => a.id === accountId);
-        return account ? computeAccountBalance(account, transactions, balanceSnapshots) : 0;
+        return account ? computeAccountBalance(account, transactions, balanceSnapshots) : undefined;
       },
       totalBalance: computeTotalBalance(bankAccounts, transactions, balanceSnapshots),
+      unknownBalanceAccountCount: countUnknownAccountBalances(bankAccounts, transactions, balanceSnapshots),
       getCategoryUsageCount(categoryId) {
         return transactions.filter((t) => t.categoryId === categoryId).length;
       },
@@ -284,6 +312,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
           initialBalance,
           externalBankAccountId: externalIds?.externalBankAccountId,
           externalBranchId: externalIds?.externalBranchId,
+          currency: externalIds?.currency,
         });
         if (initialBalance !== undefined && balanceAsOfDate) {
           await balanceSnapshotService.create(userId, {
@@ -297,7 +326,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setBankAccounts(await bankAccountService.list(userId));
         return account;
       },
-      async reconcileAccountBalance(accountId, reportedBalance, asOfDate, source, importBatchId) {
+      async reconcileAccountBalance(accountId, reportedBalance, asOfDate, source, importBatchId, metadata) {
         // Reads fresh from IndexedDB rather than the React-state closure:
         // this is often called right after reloadAll() from the same
         // call site (e.g. right after committing an import), and the
@@ -317,7 +346,9 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         const calculated = freshAccount
           ? computeAccountBalance(freshAccount, relevantTransactions, priorSnapshots, asOfDate)
           : reportedBalance;
-        const difference = Math.round((reportedBalance - calculated) * 100) / 100;
+        const difference = calculated === undefined
+          ? undefined
+          : Math.round((reportedBalance - calculated) * 100) / 100;
         // With no prior snapshot at all, "calculated" is just initialBalance
         // (0 for a fresh account) plus whatever transactions this same
         // import just created — comparing that against the bank's real
@@ -332,11 +363,21 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         // itself wrong) would defeat the purpose of a manual correction.
         const status: "conferred" | "discrepancy" | "initial_reference" = !hasEarlierSnapshot
           ? "initial_reference"
-          : source === "manual" || Math.abs(difference) < 0.01
+          : source === "manual" || (difference !== undefined && Math.abs(difference) < 0.01)
             ? "conferred"
             : "discrepancy";
 
-        await balanceSnapshotService.create(userId, { accountId, balance: reportedBalance, asOfDate, source, importBatchId });
+        await balanceSnapshotService.create(userId, {
+          accountId,
+          balance: reportedBalance,
+          availableBalance: metadata?.availableBalance,
+          asOfDate,
+          asOfDateTime: metadata?.asOfDateTime,
+          source,
+          importBatchId,
+          institutionCode: metadata?.institutionCode,
+          externalBankAccountId: metadata?.externalBankAccountId,
+        });
         setBalanceSnapshots(await balanceSnapshotService.list(userId));
 
         await bankAccountService.update(userId, accountId, {
@@ -347,16 +388,42 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
 
         return { calculated, reported: reportedBalance, difference, status };
       },
-      async recordCardStatement(cardId, statementBalance) {
+      async recordCardStatement(cardId, statementBalance, metadata) {
         const [freshCard, freshTransactions] = await Promise.all([
           cardService.get(userId, cardId),
           transactionService.list(userId),
         ]);
         if (!freshCard) return undefined;
-        const period = getCurrentInvoicePeriod(freshCard);
-        if (!period) return undefined;
-        const computedTotal = invoiceTotalForPeriod(freshTransactions, cardId, period);
-        await invoiceService.recordStatementSnapshot(userId, cardId, period, statementBalance, computedTotal);
+        const referenceDate = metadata?.asOfDate
+          ? new Date(`${metadata.asOfDate}T12:00:00`)
+          : new Date();
+        const period = getCurrentInvoicePeriod(freshCard, referenceDate);
+        const statementTransactions = period
+          ? transactionsInPeriod(freshTransactions, cardId, period)
+          : freshTransactions.filter(
+              (transaction) =>
+                transaction.cardId === cardId &&
+                (!metadata?.periodStart || transaction.date >= metadata.periodStart) &&
+                (!metadata?.periodEnd || transaction.date <= metadata.periodEnd)
+            );
+        const composition = cardInvoiceComposition(statementTransactions);
+        const computedTotal = composition.computedTotal;
+        await invoiceService.recordStatementSnapshot(
+          userId,
+          cardId,
+          period,
+          {
+            statementBalance,
+            rawStatementBalance: metadata?.rawStatementBalance,
+            asOfDate: metadata?.asOfDate,
+            asOfDateTime: metadata?.asOfDateTime,
+            periodStart: metadata?.periodStart,
+            periodEnd: metadata?.periodEnd,
+            importBatchId: metadata?.importBatchId,
+          },
+          computedTotal,
+          composition
+        );
         setInvoices(await invoiceService.list(userId));
         const difference = Math.round((statementBalance - computedTotal) * 100) / 100;
         return { computedTotal, statementBalance, difference };
@@ -568,13 +635,13 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         const existing = await invoiceService.findByPeriod(userId, cardId, period.periodKey);
         const invoiceId = existing?.id ?? generateId();
         const transaction = await transactionService.create(userId, {
-          type: "expense",
+          type: "payment",
           description: amountPaid < invoiceTotal ? "Pagamento parcial de fatura" : "Pagamento de fatura",
           amount: amountPaid,
           date,
           categoryId: "",
           accountId,
-          cardId,
+          relatedCardId: cardId,
           paymentMethod: "debito",
           recurring: false,
           source: "manual",
@@ -589,7 +656,9 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
           amountPaid,
           accountId,
           transaction.id,
-          invoiceId
+          invoiceId,
+          "manual",
+          date
         );
         // A partial payment doesn't settle any specific parcela — only mark
         // installments paid once the invoice is fully covered.
@@ -598,6 +667,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         }
 
         setInvoices(await invoiceService.list(userId));
+        setInvoicePayments(await invoicePaymentService.list(userId));
         setTransactions(await transactionService.list(userId));
         setInstallments(await installmentService.listInstallments(userId));
       },
@@ -608,20 +678,33 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         // A partial payment leaves more than one payment transaction linked
         // to the same invoice (originId) — remove all of them, not just the
         // most recent one referenced by paymentTransactionId.
-        const paymentTxs = transactions.filter(
-          (t) => t.originType === "credit_card_invoice" && t.originId === invoice.id
-        );
-        for (const t of paymentTxs) {
-          await transactionService.remove(userId, t.id);
+        const payments = await invoicePaymentService.listForInvoice(userId, invoice.id);
+        for (const payment of payments.filter((candidate) => candidate.status !== "reversed")) {
+          if (!payment.bankTransactionId) continue;
+          const transaction = await transactionService.get(userId, payment.bankTransactionId);
+          if (!transaction) continue;
+          if (transaction.source === "import") {
+            await transactionService.update(userId, transaction.id, {
+              originType: undefined,
+              originId: undefined,
+              relatedCardId: undefined,
+            });
+          } else {
+            await transactionService.reverse(userId, transaction.id);
+          }
         }
+        await invoicePaymentService.reverseForInvoice(userId, invoice.id);
         const card = cards.find((c) => c.id === invoice.cardId);
-        const period = card ? getCurrentInvoicePeriod(card, new Date(invoice.periodEnd + "T00:00:00")) : undefined;
+        const period = card && invoice.periodEnd
+          ? getCurrentInvoicePeriod(card, new Date(`${invoice.periodEnd}T00:00:00`))
+          : undefined;
         if (period) {
           await installmentService.markInstallmentsUnpaid(userId, invoice.cardId, period.cycleStart, period.cycleEnd);
         }
         await invoiceService.remove(userId, invoiceId);
 
         setInvoices(await invoiceService.list(userId));
+        setInvoicePayments(await invoicePaymentService.list(userId));
         setTransactions(await transactionService.list(userId));
         setInstallments(await installmentService.listInstallments(userId));
       },
@@ -673,8 +756,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
 
       async undoImportBatch(id) {
         const result = await importService.undo(userId, id);
-        setTransactions(await transactionService.list(userId));
-        setImportBatches(await importService.listBatches(userId));
+        await reloadAll();
         return result;
       },
 
@@ -724,6 +806,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       categories,
       bankAccounts,
       invoices,
+      invoicePayments,
       installmentPlans,
       installments,
       importBatches,

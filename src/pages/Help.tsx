@@ -157,8 +157,8 @@ export default function Help() {
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
               <h3 className="text-sm font-bold text-ink-900">OFX (recomendado)</h3>
               <p className="mt-1 text-sm text-ink-600">
-                Formato estruturado usado por praticamente todos os bancos e cartões brasileiros. O EM DIA identifica
-                automaticamente o banco, a conta (ou cartão) e cada movimentação a partir dele, com menos chance de erro.
+                Formato estruturado oferecido por muitos bancos brasileiros. Quando o arquivo traz identificadores
+                suficientes, o EM DIA sugere o banco e o produto; em caso de dúvida, pede sua confirmação antes de importar.
               </p>
             </div>
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
@@ -177,10 +177,10 @@ export default function Help() {
               </p>
             </div>
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
-              <h3 className="text-sm font-bold text-ink-900">XLS/XLSX e PDF</h3>
+              <h3 className="text-sm font-bold text-ink-900">XLS/XLSX e TXT estruturado</h3>
               <p className="mt-1 text-sm text-ink-600">
-                Ainda não são compatíveis com a importação automática nesta versão. Se seu banco só oferecer planilha,
-                abra o arquivo e exporte/salve como CSV antes de importar.
+                Planilhas e arquivos de texto com colunas são lidos localmente e passam pelo mesmo mapeamento e revisão do CSV.
+                PDF continua fora da importação automática porque a estrutura varia demais entre instituições.
               </p>
             </div>
           </div>
@@ -210,7 +210,7 @@ export default function Help() {
               <h3 className="text-sm font-bold text-ink-900">Como funciona a importação</h3>
               <ol className="mt-2 space-y-2 text-sm text-ink-600">
                 <li>1. Em Transações, clique em "Importar extrato" (ou em Cartões, "Importar fatura") e escolha o arquivo.</li>
-                <li>2. O EM DIA lê o arquivo no seu próprio dispositivo. Para OFX, identifica o banco e a conta/cartão automaticamente.</li>
+                <li>2. O EM DIA lê o arquivo no seu próprio dispositivo. Para OFX, sugere banco e conta/cartão quando os identificadores são confiáveis; caso contrário, pede sua escolha.</li>
                 <li>3. Lançamentos já existentes aparecem como "Já importada"; pagamentos, estornos e encargos de fatura são identificados e sinalizados para revisão.</li>
                 <li>4. Ajuste a categoria de cada item se quiser, confirme e pronto — nada é enviado para fora do seu aparelho antes disso.</li>
               </ol>

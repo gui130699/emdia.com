@@ -1,7 +1,21 @@
 import type { BalanceSnapshot, BankAccount, Transaction } from "../types/finance";
 
-function movesAccount(t: Transaction, accountId: string, sinceDate?: string): number {
-  if (sinceDate && t.date <= sinceDate) return 0;
+function instant(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function snapshotMoment(snapshot: BalanceSnapshot): number {
+  return instant(snapshot.asOfDateTime ?? `${snapshot.asOfDate}T23:59:59.999`);
+}
+
+function transactionMoment(transaction: Transaction): number {
+  return instant(transaction.postingDateTime ?? `${transaction.date}T00:00:00.000`);
+}
+
+function movesAccount(t: Transaction, accountId: string, since?: BalanceSnapshot): number {
+  if (t.isReversed) return 0;
+  if (since && transactionMoment(t) <= snapshotMoment(since)) return 0;
   if (t.type === "transfer") {
     if (t.accountId === accountId) return -t.amount;
     if (t.destinationAccountId === accountId) return t.amount;
@@ -10,6 +24,7 @@ function movesAccount(t: Transaction, accountId: string, sinceDate?: string): nu
   if (t.accountId !== accountId) return 0;
   if (t.type === "income") return t.amount;
   if (t.type === "expense") return -t.amount;
+  if (t.type === "payment") return -t.amount;
   return 0;
 }
 
@@ -38,9 +53,9 @@ export function computeAccountBalance(
    * from the count and making the historical comparison meaningless.
    * Omitted entirely for the normal "current balance right now" case. */
   asOfCutoff?: string
-): number {
+): number | undefined {
   const accountSnapshots = snapshots.filter(
-    (s) => s.accountId === account.id && (!asOfCutoff || s.asOfDate <= asOfCutoff)
+    (s) => s.accountId === account.id && (!asOfCutoff || snapshotMoment(s) <= instant(asOfCutoff.includes("T") ? asOfCutoff : `${asOfCutoff}T23:59:59.999`))
   );
   // Two snapshots can legitimately share the same asOfDate (e.g. a manual
   // correction made today to override an earlier bad entry also dated
@@ -50,15 +65,19 @@ export function computeAccountBalance(
   // recorded most recently.
   const latest = accountSnapshots.reduce<BalanceSnapshot | undefined>((best, s) => {
     if (!best) return s;
-    if (s.asOfDate !== best.asOfDate) return s.asOfDate > best.asOfDate ? s : best;
-    return s.createdAt > best.createdAt ? s : best;
+    const moment = snapshotMoment(s);
+    const bestMoment = snapshotMoment(best);
+    if (moment !== bestMoment) return moment > bestMoment ? s : best;
+    const sRecordedAt = s.updatedAt || s.createdAt;
+    const bestRecordedAt = best.updatedAt || best.createdAt;
+    return sRecordedAt > bestRecordedAt ? s : best;
   }, undefined);
 
   let balance = latest ? latest.balance : account.initialBalance;
-  const sinceDate = latest?.asOfDate;
+  if (balance === undefined) return undefined;
 
   for (const t of transactions) {
-    balance += movesAccount(t, account.id, sinceDate);
+    balance += movesAccount(t, account.id, latest);
   }
 
   return balance;
@@ -68,6 +87,18 @@ export function computeTotalBalance(
   accounts: BankAccount[],
   transactions: Transaction[],
   snapshots: BalanceSnapshot[] = []
+): number | undefined {
+  if (accounts.length === 0) return 0;
+  const known = accounts
+    .map((account) => computeAccountBalance(account, transactions, snapshots))
+    .filter((balance): balance is number => balance !== undefined);
+  return known.length > 0 ? known.reduce((sum, balance) => sum + balance, 0) : undefined;
+}
+
+export function countUnknownAccountBalances(
+  accounts: BankAccount[],
+  transactions: Transaction[],
+  snapshots: BalanceSnapshot[] = []
 ): number {
-  return accounts.reduce((sum, account) => sum + computeAccountBalance(account, transactions, snapshots), 0);
+  return accounts.filter((account) => computeAccountBalance(account, transactions, snapshots) === undefined).length;
 }

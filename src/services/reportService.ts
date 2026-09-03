@@ -17,7 +17,7 @@ export interface PeriodTotals {
  * account-side movements.
  */
 export function isCashFlowTransaction(t: Transaction): boolean {
-  return (t.type === "income" || t.type === "expense") && !t.cardId;
+  return !t.isReversed && !t.transactionSubtype && (t.type === "income" || t.type === "expense" || t.type === "payment") && !t.cardId;
 }
 
 export function sumByType(transactions: Transaction[]): PeriodTotals {
@@ -86,7 +86,7 @@ export function categoryBreakdown(
   // Same cash-flow scoping as sumByType: a card purchase's category shows
   // up in "Consumo no cartão" (cardConsumptionBreakdown), not here, so this
   // chart's total always matches the cash-flow expense/income summary above it.
-  const filtered = transactions.filter((t) => t.type === type && !t.cardId);
+  const filtered = transactions.filter((t) => !t.isReversed && !t.transactionSubtype && t.type === type && !t.cardId);
   const total = filtered.reduce((sum, t) => sum + t.amount, 0);
   const byCategory = new Map<string, number>();
 
@@ -127,7 +127,7 @@ export function cardConsumptionBreakdown(
   cardId?: string
 ): CategoryBreakdownItem[] {
   const filtered = transactions.filter(
-    (t) => !!t.cardId && (!cardId || t.cardId === cardId) && CARD_CONSUMPTION_TYPES.includes(t.cardEntryType)
+    (t) => !t.isReversed && !!t.cardId && (!cardId || t.cardId === cardId) && CARD_CONSUMPTION_TYPES.includes(t.cardEntryType)
   );
   const total = filtered.reduce((sum, t) => sum + t.amount, 0);
   const byCategory = new Map<string, number>();
@@ -200,7 +200,7 @@ export function cardStatementSummary(transactions: Transaction[]): CardStatement
  * to show on its own since it summarizes potentially many card purchases. */
 export function invoicePaymentsTotal(transactions: Transaction[]): number {
   return transactions
-    .filter((t) => t.type === "expense" && !t.cardId && t.originType === "credit_card_invoice")
+    .filter((t) => !t.isReversed && (t.type === "payment" || t.type === "expense") && !t.cardId && t.originType === "credit_card_invoice")
     .reduce((sum, t) => sum + t.amount, 0);
 }
 
@@ -208,7 +208,16 @@ export function invoicePaymentsTotal(transactions: Transaction[]): number {
  * period — never income or expense, but worth surfacing as its own figure
  * so it doesn't just silently vanish from the reports. */
 export function transfersTotal(transactions: Transaction[]): number {
-  return transactions.filter((t) => t.type === "transfer").reduce((sum, t) => sum + t.amount, 0);
+  return transactions.filter((t) => !t.isReversed && t.type === "transfer").reduce((sum, t) => sum + t.amount, 0);
+}
+
+export function balanceAdjustmentsTotal(transactions: Transaction[]): number {
+  return transactions
+    .filter((transaction) => !transaction.isReversed && transaction.transactionSubtype === "balance_adjustment")
+    .reduce(
+      (sum, transaction) => sum + (transaction.type === "income" ? transaction.amount : -transaction.amount),
+      0
+    );
 }
 
 export function generateInsights(

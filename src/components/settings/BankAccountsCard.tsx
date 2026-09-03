@@ -30,13 +30,21 @@ function maskIdentifier(value?: string): string | undefined {
 }
 
 export default function BankAccountsCard() {
-  const { bankAccounts, addBankAccount, deleteBankAccount, getAccountBalance, reconcileAccountBalance } = useFinanceData();
+  const {
+    bankAccounts,
+    balanceSnapshots,
+    addBankAccount,
+    deleteBankAccount,
+    getAccountBalance,
+    reconcileAccountBalance,
+  } = useFinanceData();
   const { show } = useToast();
 
   const [institution, setInstitution] = useState<FinancialInstitution | null>(null);
   const [name, setName] = useState("");
   const [kind, setKind] = useState<BankAccountKind>("corrente");
   const [currentBalance, setCurrentBalance] = useState(0);
+  const [balanceInformed, setBalanceInformed] = useState(false);
   const [balanceAsOfDate, setBalanceAsOfDate] = useState(todayISO());
   const [adding, setAdding] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -46,7 +54,7 @@ export default function BankAccountsCard() {
 
   function openCorrection(accountId: string) {
     setCorrectingId(accountId);
-    setCorrectedBalance(getAccountBalance(accountId));
+    setCorrectedBalance(getAccountBalance(accountId) ?? 0);
   }
 
   async function handleCorrectBalance() {
@@ -70,11 +78,18 @@ export default function BankAccountsCard() {
 
   async function handleAdd() {
     if (!name.trim()) return;
-    await addBankAccount(name, kind, institution ?? undefined, currentBalance, balanceAsOfDate);
+    await addBankAccount(
+      name,
+      kind,
+      institution ?? undefined,
+      balanceInformed ? currentBalance : undefined,
+      balanceInformed ? balanceAsOfDate : undefined
+    );
     setInstitution(null);
     setName("");
     setKind("corrente");
     setCurrentBalance(0);
+    setBalanceInformed(false);
     setBalanceAsOfDate(todayISO());
     setAdding(false);
     show("Conta adicionada.");
@@ -104,6 +119,10 @@ export default function BankAccountsCard() {
         <ul className="divide-y divide-ink-100">
           {bankAccounts.map((account) => {
             const maskedId = maskIdentifier(account.externalBankAccountId);
+            const balance = getAccountBalance(account.id);
+            const needsLegacyReview = balanceSnapshots.some(
+              (snapshot) => snapshot.accountId === account.id && snapshot.reviewStatus === "needs_review"
+            );
             return (
               <li key={account.id} className="py-2.5">
                 <div className="flex items-center justify-between gap-3">
@@ -117,7 +136,7 @@ export default function BankAccountsCard() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-ink-900">{account.name}</p>
                       <p className="truncate text-xs text-ink-400">
-                        {KIND_LABELS[account.kind]} · {formatCurrency(getAccountBalance(account.id))}
+                        {KIND_LABELS[account.kind]} · {balance === undefined ? "Saldo não informado" : formatCurrency(balance)}
                         {maskedId ? ` · ${maskedId}` : ""}
                       </p>
                       {account.reconciliationStatus && account.reconciliationStatus !== "unreconciled" && (
@@ -137,6 +156,11 @@ export default function BankAccountsCard() {
                               ? "Saldo inicial registrado"
                               : "Saldo conferido"}
                           {account.lastReconciledAt ? ` · ${formatDate(account.lastReconciledAt.slice(0, 10))}` : ""}
+                        </p>
+                      )}
+                      {needsLegacyReview && (
+                        <p className="mt-0.5 flex items-center gap-1 text-xs text-warning-600">
+                          <AlertTriangle size={11} /> Revise o saldo zero criado por uma versão anterior.
                         </p>
                       )}
                     </div>
@@ -231,14 +255,25 @@ export default function BankAccountsCard() {
               </select>
             </FormField>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <FormField label="Saldo atual">
-              <CurrencyInput value={currentBalance} onChange={setCurrentBalance} />
-            </FormField>
-            <FormField label="Posição em">
-              <input type="date" className={inputClass} value={balanceAsOfDate} onChange={(e) => setBalanceAsOfDate(e.target.value)} />
-            </FormField>
-          </div>
+          <label className="flex items-center gap-2 text-sm font-medium text-ink-700">
+            <input
+              type="checkbox"
+              checked={balanceInformed}
+              onChange={(event) => setBalanceInformed(event.target.checked)}
+              className="h-4 w-4 rounded border-ink-300 text-brand-600"
+            />
+            Informar o saldo atual agora
+          </label>
+          {balanceInformed && (
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Saldo atual">
+                <CurrencyInput value={currentBalance} onChange={setCurrentBalance} />
+              </FormField>
+              <FormField label="Posição em">
+                <input type="date" className={inputClass} value={balanceAsOfDate} onChange={(e) => setBalanceAsOfDate(e.target.value)} />
+              </FormField>
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               onClick={() => setAdding(false)}

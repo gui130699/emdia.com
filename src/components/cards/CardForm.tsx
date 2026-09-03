@@ -22,8 +22,8 @@ const schema = z.object({
   lastFourDigits: z.string().regex(/^\d{4}$/, "Informe os últimos 4 números"),
   limit: z.number().nonnegative().optional(),
   limitUnknown: z.boolean(),
-  closingDay: z.number().min(1).max(31),
-  dueDay: z.number().min(1).max(31),
+  closingDay: z.number().min(1).max(31).optional(),
+  dueDay: z.number().min(1).max(31).optional(),
   accountId: z.string().optional(),
   color: z.string(),
   useCustomColor: z.boolean(),
@@ -54,12 +54,8 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
           ...initial,
           limit: initial.limit,
           limitUnknown: initial.limit == null,
-          // Editing a card is exactly where an unconfirmed
-          // closing/due day (e.g. a card created from a statement
-          // import) gets resolved into a real one — these two always
-          // need a concrete number to save through this form.
-          closingDay: initial.closingDay ?? 5,
-          dueDay: initial.dueDay ?? 15,
+          closingDay: initial.closingDay,
+          dueDay: initial.dueDay,
         }
       : {
           name: "",
@@ -69,11 +65,11 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
           institutionLogoUrl: "",
           type: "credito",
           lastFourDigits: "",
-          limit: 0,
-          limitUnknown: false,
-          closingDay: 5,
-          dueDay: 15,
-          accountId: bankAccounts[0]?.id ?? "",
+          limit: undefined,
+          limitUnknown: true,
+          closingDay: undefined,
+          dueDay: undefined,
+          accountId: "",
           color: COLORS[0],
           useCustomColor: false,
         },
@@ -89,7 +85,7 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
       onSubmit={handleSubmit(({ limitUnknown, ...values }) =>
         onSubmit({
           ...values,
-          limit: values.type === "debito" ? 0 : limitUnknown ? undefined : values.limit,
+          limit: values.type === "debito" || limitUnknown ? undefined : values.limit,
         })
       )}
       className="space-y-4"
@@ -156,15 +152,33 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
 
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Dia de fechamento" htmlFor="closingDay" error={errors.closingDay?.message}>
-          <input id="closingDay" type="number" min={1} max={31} className={inputClass} {...register("closingDay", { valueAsNumber: true })} />
+          <input
+            id="closingDay"
+            type="number"
+            min={1}
+            max={31}
+            placeholder="Não informado"
+            className={inputClass}
+            {...register("closingDay", { setValueAs: (value) => value === "" ? undefined : Number(value) })}
+          />
         </FormField>
         <FormField label="Dia de vencimento" htmlFor="dueDay" error={errors.dueDay?.message}>
-          <input id="dueDay" type="number" min={1} max={31} className={inputClass} {...register("dueDay", { valueAsNumber: true })} />
+          <input
+            id="dueDay"
+            type="number"
+            min={1}
+            max={31}
+            placeholder="Não informado"
+            className={inputClass}
+            {...register("dueDay", { setValueAs: (value) => value === "" ? undefined : Number(value) })}
+          />
         </FormField>
       </div>
+      <p className="-mt-2 text-xs text-ink-400">Deixe em branco quando o fechamento ou o vencimento ainda não forem conhecidos.</p>
 
       <FormField label="Conta relacionada" htmlFor="accountId">
         <select id="accountId" className={inputClass} {...register("accountId")}>
+          <option value="">Nenhuma conta selecionada</option>
           {bankAccounts.map((a) => (
             <option key={a.id} value={a.id}>{a.name}</option>
           ))}

@@ -13,6 +13,8 @@ export interface CreditCardInput {
   type: CreditCard["type"];
   lastFourDigits: string;
   limit?: number;
+  availableCredit?: number;
+  availableCreditAsOfDateTime?: string;
   closingDay?: number;
   dueDay?: number;
   accountId?: string;

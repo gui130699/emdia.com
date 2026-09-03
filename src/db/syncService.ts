@@ -36,14 +36,29 @@ const SYNCED_ENTITIES = [
   "installmentPlans",
   "installments",
   "invoices",
+  "invoicePayments",
   "importBatches",
   "importMappings",
+  "importProfiles",
   "categorizationRules",
   "balanceSnapshots",
   "userProfile",
   "recurringBillRules",
   "reconciliationAliases",
+  "settings",
 ] as const;
+
+function withoutUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutUndefined);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, withoutUndefined(entry)])
+    );
+  }
+  return value;
+}
 
 export async function enqueueSync(
   userId: string,
@@ -99,7 +114,7 @@ export async function drainSyncQueue(userId: string): Promise<void> {
         if (item.operation === "delete") {
           await deleteDoc(ref);
         } else {
-          await setDoc(ref, item.payload as Record<string, unknown>, { merge: false });
+          await setDoc(ref, withoutUndefined(item.payload) as Record<string, unknown>, { merge: false });
         }
         await db.syncQueue.delete(item.id);
       } catch (err) {
@@ -158,14 +173,17 @@ let engineStarted = new Set<string>();
 
 /** Wires the background drainer to the `online` event and a light polling
  * interval, and does one remote pull. Call once per signed-in session. */
-export function startSyncEngine(userId: string): () => void {
+export function startSyncEngine(userId: string, onRemoteChanges?: () => void | Promise<void>): () => void {
   if (engineStarted.has(userId)) return () => {};
   engineStarted.add(userId);
 
   const onOnline = () => void drainSyncQueue(userId);
   window.addEventListener("online", onOnline);
 
-  void pullRemoteChanges(userId).then(() => drainSyncQueue(userId));
+  void pullRemoteChanges(userId).then(async () => {
+    await onRemoteChanges?.();
+    await drainSyncQueue(userId);
+  });
 
   const interval = setInterval(() => void drainSyncQueue(userId), DRAIN_INTERVAL_MS);
 

@@ -17,7 +17,11 @@ export interface BankAccount {
    * the user just wants to track from zero). Whenever a snapshot exists,
    * the current balance is computed from the most recent one instead —
    * never from this field plus the account's entire transaction history. */
-  initialBalance: number;
+  /** Legacy opening balance. Undefined means the user never informed one;
+   * this must not be coerced to zero because an unknown balance is not a
+   * known R$0 position. New accounts should prefer BalanceSnapshot. */
+  initialBalance?: number;
+  currency?: string;
   /** The bank's own account/branch identifiers, kept so a future OFX import
    * can recognize this is the same account automatically. Always masked
    * when shown in the UI — never a credential. */
@@ -31,7 +35,15 @@ export interface BankAccount {
   updatedAt: string;
 }
 
-export type BalanceSnapshotSource = "manual" | "ofx" | "csv" | "reconciliation";
+export type BalanceSnapshotSource =
+  | "manual"
+  | "ofx"
+  | "csv"
+  | "xls"
+  | "xlsx"
+  | "qif"
+  | "txt"
+  | "reconciliation";
 
 /** A known-good balance at a point in time, used as the base for computing
  * the account's current balance (snapshot + movements after asOfDate) —
@@ -42,16 +54,23 @@ export interface BalanceSnapshot {
   userId: string;
   accountId: string;
   balance: number;
+  availableBalance?: number;
   asOfDate: string; // ISO yyyy-MM-dd
+  /** Full OFX timestamp when supplied, including its UTC offset. */
+  asOfDateTime?: string;
   source: BalanceSnapshotSource;
   importBatchId?: string;
+  institutionCode?: string;
+  externalBankAccountId?: string;
+  /** Used only for legacy candidates that cannot be repaired safely. */
+  reviewStatus?: "confirmed" | "needs_review";
   createdAt: string;
   updatedAt: string;
 }
 
-/** income/expense/transfer only — "both" is a Category-applicability
- * concept, not a real transaction kind. */
-export type TransactionType = "income" | "expense" | "transfer";
+/** "payment" is a bank-side invoice settlement: it affects cash flow and
+ * account balance without pretending to be another categorized purchase. */
+export type TransactionType = "income" | "expense" | "transfer" | "payment";
 export type CategoryApplicableType = "income" | "expense" | "both";
 
 export type PaymentMethod =
@@ -70,7 +89,7 @@ export type RecurringFrequency =
   | "yearly";
 
 export type TransactionSource = "manual" | "import" | "system";
-export type ImportSource = "ofx" | "csv" | "xls" | "xlsx" | "qif" | "pdf";
+export type ImportSource = "ofx" | "csv" | "xls" | "xlsx" | "qif" | "txt" | "pdf";
 
 /** What generated this transaction, for reporting/dedup/undo purposes. */
 export type TransactionOriginType =
@@ -126,6 +145,10 @@ export interface Transaction {
    * with accountId being "the account debited now" (credit purchases only
    * reduce a bank balance when the invoice is paid). */
   cardId?: string;
+  /** A bank-side payment may relate to a card without becoming a card
+   * purchase. Keeping that relation out of cardId prevents it from being
+   * added to the invoice and keeps the real bank cash-flow visible. */
+  relatedCardId?: string;
   paymentMethod: PaymentMethod;
   recurring: boolean;
   recurringFrequency?: RecurringFrequency;
@@ -145,7 +168,13 @@ export interface Transaction {
   // Import metadata (only set when source === "import")
   importSource?: ImportSource;
   importBatchId?: string;
+  /** The bank-provided grouping key (e.g. FITID). It is not unique. */
+  externalGroupId?: string;
+  /** Stable per-line fingerprint used for deduplication. */
+  externalRecordId?: string;
   externalId?: string;
+  /** Full posting timestamp when the source supplies one. */
+  postingDateTime?: string;
   rawDescription?: string;
   normalizedDescription?: string;
   importedAt?: string;
@@ -212,6 +241,9 @@ export interface CreditCard {
    * R$0 limit. Never default this to 0 just because a source (like a card
    * statement import) didn't provide a number. */
   limit?: number;
+  /** Bank-reported available credit, distinct from the contractual limit. */
+  availableCredit?: number;
+  availableCreditAsOfDateTime?: string;
   /** Undefined means the cycle boundaries aren't known yet — never default
    * to 5/15 just to have *a* number; callers must handle "not computable
    * yet" instead (see getCurrentInvoicePeriod). */
@@ -231,6 +263,8 @@ export interface CreditCard {
    * reachable. Preferred over deletion whenever the card has any history. */
   archived?: boolean;
   archivedAt?: string;
+  /** Legacy 0/5/15 candidates are flagged, never silently erased. */
+  reviewFields?: Array<"limit" | "closingDay" | "dueDay">;
   createdAt: string;
   updatedAt: string;
 }
@@ -242,16 +276,25 @@ export interface Invoice {
   userId: string;
   cardId: string;
   periodKey: string; // yyyy-MM of the closing date, stable identifier
-  periodStart: string;
-  periodEnd: string;
-  closingDate: string;
-  dueDate: string;
+  periodStart?: string;
+  periodEnd?: string;
+  closingDate?: string;
+  dueDate?: string;
+  purchaseTotal?: number;
+  installmentTotal?: number;
+  chargesTotal?: number;
+  previousBalance?: number;
+  paymentsTotal?: number;
+  creditsTotal?: number;
   total: number;
   /** The bank's own printed total for this cycle, when a card-statement
    * import provided one — kept separate from `total` (computed from our
    * own purchase transactions) so a mismatch can be surfaced instead of
    * silently trusted. */
   statementBalance?: number;
+  /** Original signed value from the statement for auditability. */
+  rawStatementBalance?: number;
+  statementAsOfDateTime?: string;
   /** Populated once any payment is recorded — supports partial payments
    * without losing track of what's still owed. Full payment today always
    * sets this to 0. */
@@ -261,6 +304,29 @@ export interface Invoice {
   paidAmount?: number;
   paidAccountId?: string;
   paymentTransactionId?: string;
+  /** Present only when this invoice row itself was created by an import. */
+  importBatchId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InvoicePaymentStatus = "pending" | "matched" | "confirmed" | "reversed";
+
+/** One payment event. Invoice totals may aggregate several partial payments,
+ * but each bank/card statement link remains independently auditable. */
+export interface InvoicePayment {
+  id: string;
+  userId: string;
+  invoiceId: string;
+  cardId: string;
+  amount: number;
+  paymentDate: string;
+  bankAccountId?: string;
+  bankTransactionId?: string;
+  cardStatementTransactionId?: string;
+  source: "manual" | "import" | "reconciliation";
+  status: InvoicePaymentStatus;
+  confidenceScore?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -276,6 +342,12 @@ export interface InstallmentPlan {
   totalAmount: number;
   installmentCount: number;
   firstInstallmentDate: string;
+  /** First position the app actually observed. Positions before it are
+   * historical context, not fabricated expenses. */
+  trackingStartNumber?: number;
+  currentObservedNumber?: number;
+  priorInstallmentsTreatment?: "historical" | "paid";
+  totalAmountEstimated?: boolean;
   /** True only if every installment's invoice has been confirmed paid —
    * blocks destructive edits/deletes per the spec. */
   hasConsolidatedInstallments?: boolean;
@@ -283,7 +355,7 @@ export interface InstallmentPlan {
   updatedAt: string;
 }
 
-export type InstallmentStatus = "scheduled" | "billed" | "paid";
+export type InstallmentStatus = "historical" | "scheduled" | "billed" | "paid";
 
 export interface Installment {
   id: string;
@@ -298,6 +370,9 @@ export interface Installment {
   invoicePeriodKey?: string;
   status: InstallmentStatus;
   transactionId?: string;
+  observedAt?: string;
+  importBatchId?: string;
+  externalRecordId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -335,7 +410,7 @@ export interface Category {
 }
 
 export type ThemePreference = "light" | "dark" | "system";
-export type InterfaceDensity = "comfortable" | "compact";
+export type InterfaceDensity = "compact" | "default" | "comfortable";
 
 export interface NotificationPreferences {
   email: boolean;
@@ -414,8 +489,23 @@ export interface ImportMapping {
   creditColumn?: string;
   debitColumn?: string;
   externalIdColumn?: string;
+  installmentNumberColumn?: string;
+  installmentCountColumn?: string;
   dateFormat: "dd/MM/yyyy" | "yyyy-MM-dd" | "MM/dd/yyyy";
   decimalFormat: "comma" | "dot";
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Reusable institution/file signature. Raw files are never persisted. */
+export interface ImportProfile {
+  id: string;
+  userId: string;
+  name: string;
+  institutionCode?: string;
+  product?: "bank_account" | "credit_card";
+  sourceFormat: ImportSource;
+  signatures: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -469,6 +559,9 @@ export interface RecurringBillRule {
   accountId?: string;
   cardId?: string;
   status: RecurringRuleStatus;
+  pausedAt?: string;
+  /** Occurrences before this date are intentionally skipped after resume. */
+  resumeFromDate?: string;
   createdAt: string;
   updatedAt: string;
 }

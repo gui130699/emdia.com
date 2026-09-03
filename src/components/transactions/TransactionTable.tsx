@@ -6,13 +6,13 @@ import Badge from "../ui/Badge";
 
 function amountClass(t: Transaction) {
   if (t.type === "income") return "text-success-600";
-  if (t.type === "expense") return "text-danger-600";
+  if (t.type === "expense" || t.type === "payment") return "text-danger-600";
   return "text-ink-700";
 }
 
 function amountPrefix(t: Transaction) {
   if (t.type === "income") return "+ ";
-  if (t.type === "expense") return "- ";
+  if (t.type === "expense" || t.type === "payment") return "- ";
   return "";
 }
 
@@ -60,7 +60,7 @@ export default function TransactionTable({
                     {t.description}
                   </span>
                 </td>
-                <td className="py-3 pr-3 text-ink-500">{t.type === "transfer" ? "—" : categoryName(t.categoryId)}</td>
+                <td className="py-3 pr-3 text-ink-500">{t.type === "transfer" ? "—" : t.type === "payment" ? "Pagamento de fatura" : categoryName(t.categoryId)}</td>
                 <td className="py-3 pr-3 text-ink-500">
                   {t.type === "transfer" ? `${accountName(t.accountId)} → ${accountName(t.destinationAccountId ?? "")}` : accountName(t.accountId)}
                 </td>
@@ -73,7 +73,7 @@ export default function TransactionTable({
                   {formatCurrency(t.amount)}
                 </td>
                 <td className="py-3 pl-3">
-                  <div className="flex justify-end gap-1">
+                  {t.type !== "payment" && <div className="flex justify-end gap-1">
                     <button aria-label="Editar" onClick={() => onEdit(t)} className="rounded-lg p-2 text-ink-400 hover:bg-ink-100 hover:text-ink-700">
                       <Pencil size={15} />
                     </button>
@@ -83,7 +83,7 @@ export default function TransactionTable({
                     <button aria-label="Excluir" onClick={() => onDelete(t)} className="rounded-lg p-2 text-ink-400 hover:bg-danger-500/10 hover:text-danger-600">
                       <Trash2 size={15} />
                     </button>
-                  </div>
+                  </div>}
                 </td>
               </tr>
             ))}
@@ -103,7 +103,7 @@ export default function TransactionTable({
                 <p className="truncate text-xs text-ink-400">
                   {t.type === "transfer"
                     ? `${accountName(t.accountId)} → ${accountName(t.destinationAccountId ?? "")}`
-                    : `${categoryName(t.categoryId)} · ${accountName(t.accountId)}`}
+                    : `${t.type === "payment" ? "Pagamento de fatura" : categoryName(t.categoryId)} · ${accountName(t.accountId)}`}
                 </p>
               </div>
               <span className={`shrink-0 font-semibold ${amountClass(t)}`}>
@@ -113,7 +113,7 @@ export default function TransactionTable({
             </div>
             <div className="mt-3 flex items-center justify-between">
               <p className="text-xs text-ink-400">{formatDate(t.date)}</p>
-              <div className="flex gap-1">
+              {t.type !== "payment" && <div className="flex gap-1">
                 <button aria-label="Editar" onClick={() => onEdit(t)} className="rounded-lg p-2 text-ink-400 hover:bg-ink-100">
                   <Pencil size={15} />
                 </button>
@@ -123,7 +123,7 @@ export default function TransactionTable({
                 <button aria-label="Excluir" onClick={() => onDelete(t)} className="rounded-lg p-2 text-ink-400 hover:bg-danger-500/10 hover:text-danger-600">
                   <Trash2 size={15} />
                 </button>
-              </div>
+              </div>}
             </div>
           </li>
         ))}

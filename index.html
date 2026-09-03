@@ -17,6 +17,26 @@
       rel="stylesheet"
     />
     <title>EM DIA</title>
+    <script>
+      (() => {
+        try {
+          const appearance = JSON.parse(localStorage.getItem("emdia:appearance") || "null");
+          if (!appearance) return;
+          const dark = appearance.theme === "dark" || (appearance.theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          if (appearance.density) document.documentElement.dataset.density = appearance.density;
+          const accent = {
+            "#059669": ["#059669", "#064e3b"], "#2563eb": ["#2563eb", "#1e3a8a"],
+            "#7c3aed": ["#7c3aed", "#4c1d95"], "#ea580c": ["#ea580c", "#7c2d12"],
+            "#dc2626": ["#dc2626", "#7f1d1d"], "#0d9488": ["#0d9488", "#134e4a"]
+          }[appearance.accentColor];
+          if (accent) {
+            document.documentElement.style.setProperty("--color-brand-600", accent[0]);
+            document.documentElement.style.setProperty("--color-brand-900", accent[1]);
+          }
+        } catch {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

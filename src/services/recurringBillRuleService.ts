@@ -85,6 +85,8 @@ export const recurringBillRuleService = {
     cascadeToFuture: boolean,
     allBills: AccountBill[]
   ): Promise<void> {
+    const current = await store.get(userId, id);
+    const merged = current ? { ...current, ...patch } : undefined;
     await store.update(userId, id, { ...patch, updatedAt: new Date().toISOString() });
 
     if (cascadeToFuture) {
@@ -94,7 +96,14 @@ export const recurringBillRuleService = {
         const billPatch: Partial<AccountBillInput> = {};
         if (patch.description !== undefined) billPatch.description = patch.description;
         if (patch.categoryId !== undefined) billPatch.categoryId = patch.categoryId;
-        if (patch.defaultAmount !== undefined) billPatch.amount = patch.defaultAmount;
+        if (
+          merged &&
+          (patch.defaultAmount !== undefined || patch.estimatedAmount !== undefined || patch.amountType !== undefined)
+        ) {
+          billPatch.amount = merged.amountType === "fixed"
+            ? merged.defaultAmount
+            : merged.estimatedAmount ?? merged.defaultAmount;
+        }
         if (patch.paymentMethod !== undefined) billPatch.paymentMethod = patch.paymentMethod;
         if (patch.accountId !== undefined) billPatch.accountId = patch.accountId;
         if (Object.keys(billPatch).length > 0) {
@@ -131,6 +140,10 @@ export const recurringBillRuleService = {
       if (endDateLimit && cursor > endDateLimit) break;
 
       const dueDate = toDateInputValue(cursor);
+      if (rule.resumeFromDate && dueDate < rule.resumeFromDate) {
+        cursor = stepDate(cursor, rule.frequency, rule.dayOfMonth);
+        continue;
+      }
       if (!existingDueDates.has(dueDate)) {
         await accountService.create(userId, {
           description: rule.description,
@@ -162,14 +175,20 @@ export const recurringBillRuleService = {
    * not-yet-paid ones the user no longer wants — paid history is always
    * preserved. */
   async pause(userId: string, id: string, removeFutureUnpaid: boolean, allBills: AccountBill[]): Promise<void> {
-    await store.update(userId, id, { status: "paused", updatedAt: new Date().toISOString() });
+    const now = new Date().toISOString();
+    await store.update(userId, id, { status: "paused", pausedAt: now, updatedAt: now });
     if (removeFutureUnpaid) {
       await this.removeUnpaidOccurrences(userId, id, allBills);
     }
   },
 
   async reactivate(userId: string, id: string): Promise<void> {
-    await store.update(userId, id, { status: "active", updatedAt: new Date().toISOString() });
+    const now = new Date().toISOString();
+    await store.update(userId, id, {
+      status: "active",
+      resumeFromDate: toDateInputValue(new Date()),
+      updatedAt: now,
+    });
   },
 
   /** Ends the rule permanently. Paid occurrences are always kept; pending
@@ -182,7 +201,10 @@ export const recurringBillRuleService = {
   },
 
   async removeUnpaidOccurrences(userId: string, ruleId: string, allBills: AccountBill[]): Promise<void> {
-    const unpaid = allBills.filter((b) => b.recurringRuleId === ruleId && b.status !== "paid");
+    const today = toDateInputValue(new Date());
+    const unpaid = allBills.filter(
+      (bill) => bill.recurringRuleId === ruleId && bill.status !== "paid" && bill.dueDate >= today
+    );
     for (const bill of unpaid) {
       await accountService.remove(userId, bill.id);
     }

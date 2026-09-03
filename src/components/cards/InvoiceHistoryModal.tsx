@@ -33,18 +33,25 @@ export default function InvoiceHistoryModal({ card, invoices, onClose }: Invoice
           {cardInvoices.map((inv) => {
             const status = STATUS_CONFIG[inv.status];
             return (
-              <li key={inv.id} className="flex items-center justify-between rounded-lg border border-ink-100 p-3">
-                <div>
+              <li key={inv.id} className="rounded-lg border border-ink-100 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
                   <p className="text-sm font-medium text-ink-900">{inv.periodKey}</p>
                   <p className="text-xs text-ink-400">
-                    Vencimento {formatDate(inv.dueDate)}
+                    {inv.dueDate ? `Vencimento ${formatDate(inv.dueDate)}` : "Vencimento não informado"}
                     {inv.paidAt ? ` · Paga em ${formatDate(inv.paidAt.slice(0, 10))}` : ""}
                   </p>
-                </div>
-                <div className="flex items-center gap-2">
+                  </div>
+                  <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-ink-900">{formatCurrency(inv.total)}</span>
                   <Badge label={status.label} tone={status.tone} />
+                  </div>
                 </div>
+                {(inv.purchaseTotal != null || inv.installmentTotal != null || inv.chargesTotal != null) && (
+                  <p className="mt-2 text-xs text-ink-500">
+                    Compras {formatCurrency(inv.purchaseTotal ?? 0)} · Parcelas {formatCurrency(inv.installmentTotal ?? 0)} · Encargos/saldo anterior {formatCurrency((inv.chargesTotal ?? 0) + (inv.previousBalance ?? 0))} · Pagamentos/créditos -{formatCurrency((inv.paymentsTotal ?? 0) + (inv.creditsTotal ?? 0))}
+                  </p>
+                )}
               </li>
             );
           })}

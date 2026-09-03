@@ -20,7 +20,7 @@ export function createRepository<T extends { id: string }>(entity: string) {
 
     async create(userId: string, item: T): Promise<T> {
       await getDb(userId).table<T, string>(entity).put(item);
-      void enqueueSync(userId, entity, item.id, "create", item);
+      await enqueueSync(userId, entity, item.id, "create", item);
       return item;
     },
 
@@ -30,20 +30,20 @@ export function createRepository<T extends { id: string }>(entity: string) {
       if (!existing) return undefined;
       const updated = { ...existing, ...patch } as T;
       await table.put(updated);
-      void enqueueSync(userId, entity, id, "update", updated);
+      await enqueueSync(userId, entity, id, "update", updated);
       return updated;
     },
 
     async remove(userId: string, id: string): Promise<void> {
       await getDb(userId).table<T, string>(entity).delete(id);
-      void enqueueSync(userId, entity, id, "delete", null);
+      await enqueueSync(userId, entity, id, "delete", null);
     },
 
     async replaceAll(userId: string, items: T[]): Promise<void> {
       const table = getDb(userId).table<T, string>(entity);
       await table.bulkPut(items);
       for (const item of items) {
-        void enqueueSync(userId, entity, (item as unknown as { id: string }).id, "create", item);
+        await enqueueSync(userId, entity, (item as unknown as { id: string }).id, "create", item);
       }
     },
   };

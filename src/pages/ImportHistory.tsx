@@ -17,6 +17,7 @@ const FILE_TYPE_LABEL: Record<ImportBatch["fileType"], string> = {
   xlsx: "XLSX",
   qif: "QIF",
   pdf: "PDF",
+  txt: "TXT",
 };
 
 export default function ImportHistory() {

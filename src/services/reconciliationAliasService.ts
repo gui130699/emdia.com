@@ -8,10 +8,26 @@ const store = createRepository<ReconciliationAlias>("reconciliationAliases");
 export const reconciliationAliasService = {
   list: (userId: string) => store.list(userId),
 
-  async findForDescription(userId: string, rawDescription: string): Promise<ReconciliationAlias | undefined> {
+  async findForDescription(
+    userId: string,
+    rawDescription: string,
+    accountId?: string,
+    institutionCode?: string
+  ): Promise<ReconciliationAlias | undefined> {
     const normalized = normalizeDescription(rawDescription);
     const all = await store.list(userId);
-    return all.find((a) => normalized.includes(a.normalizedBankDescription) || a.normalizedBankDescription.includes(normalized));
+    return all
+      .filter(
+        (alias) =>
+          (!accountId || !alias.accountId || alias.accountId === accountId) &&
+          (!institutionCode || !alias.institutionCode || alias.institutionCode === institutionCode) &&
+          (normalized.includes(alias.normalizedBankDescription) || alias.normalizedBankDescription.includes(normalized))
+      )
+      .sort((left, right) => {
+        const leftScope = Number(left.accountId === accountId) + Number(left.institutionCode === institutionCode);
+        const rightScope = Number(right.accountId === accountId) + Number(right.institutionCode === institutionCode);
+        return rightScope - leftScope || right.matchCount - left.matchCount;
+      })[0];
   },
 
   /** Learns (or reinforces) that a bank description points at a given
@@ -22,16 +38,25 @@ export const reconciliationAliasService = {
     rawDescription: string,
     targetType: ReconciliationAliasTargetType,
     targetId?: string,
-    recurringRuleId?: string
+    recurringRuleId?: string,
+    institutionCode?: string,
+    accountId?: string
   ): Promise<void> {
     const normalized = normalizeDescription(rawDescription);
-    const existing = (await store.list(userId)).find((a) => a.normalizedBankDescription === normalized);
+    const existing = (await store.list(userId)).find(
+      (alias) =>
+        alias.normalizedBankDescription === normalized &&
+        (alias.accountId ?? "") === (accountId ?? "") &&
+        (alias.institutionCode ?? "") === (institutionCode ?? "")
+    );
     const now = new Date().toISOString();
     if (existing) {
       await store.update(userId, existing.id, {
         targetType,
         targetId,
         recurringRuleId,
+        institutionCode,
+        accountId,
         matchCount: existing.matchCount + 1,
         lastMatchedAt: now,
         updatedAt: now,
@@ -44,6 +69,8 @@ export const reconciliationAliasService = {
       targetType,
       targetId,
       recurringRuleId,
+      institutionCode,
+      accountId,
       rawBankDescription: rawDescription,
       normalizedBankDescription: normalized,
       matchCount: 1,

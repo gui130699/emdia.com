@@ -58,10 +58,11 @@ export default function AppearanceCard() {
         <select
           className={inputClass}
           value={appearance.density}
-          onChange={(e) => updateAppearance({ density: e.target.value as "comfortable" | "compact" })}
+          onChange={(e) => updateAppearance({ density: e.target.value as "comfortable" | "default" | "compact" })}
         >
-          <option value="comfortable">Padrão</option>
           <option value="compact">Compacta</option>
+          <option value="default">Padrão</option>
+          <option value="comfortable">Confortável</option>
         </select>
       </div>
     </SettingsCard>

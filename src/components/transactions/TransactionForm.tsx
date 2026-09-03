@@ -62,7 +62,7 @@ export type TransactionFormSubmitPayload =
 interface TransactionFormProps {
   formId: string;
   initial?: Transaction;
-  defaultType?: Transaction["type"];
+  defaultType?: Exclude<Transaction["type"], "payment">;
   onSubmit: (payload: TransactionFormSubmitPayload) => Promise<void>;
 }
 
@@ -80,7 +80,7 @@ export default function TransactionForm({ formId, initial, defaultType, onSubmit
     resolver: zodResolver(schema),
     defaultValues: initial
       ? {
-          type: initial.type,
+          type: initial.type === "payment" ? "expense" : initial.type,
           description: initial.description,
           amount: initial.amount,
           date: initial.date,
@@ -99,7 +99,7 @@ export default function TransactionForm({ formId, initial, defaultType, onSubmit
           amount: 0,
           date: todayISO(),
           categoryId: "",
-          accountId: bankAccounts[0]?.id ?? "",
+          accountId: "",
           paymentMethod: "pix",
           installmentCount: 2,
           notes: "",

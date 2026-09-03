@@ -3,7 +3,7 @@ import { createRepository } from "../db/dexieRepository";
 import { generateId } from "./localStore";
 import { transactionService } from "./transactionService";
 import { toDateInputValue } from "../utils/date";
-import type { Installment, InstallmentPlan, PaymentMethod, Transaction } from "../types/finance";
+import type { ImportSource, Installment, InstallmentPlan, PaymentMethod, Transaction } from "../types/finance";
 
 const planStore = createRepository<InstallmentPlan>("installmentPlans");
 const installmentStore = createRepository<Installment>("installments");
@@ -35,6 +35,31 @@ export interface CreateInstallmentPlanInput {
    * into that batch's undo safety checks. */
   source?: Transaction["source"];
   importBatchId?: string;
+  priorInstallmentsTreatment?: "historical" | "paid";
+  observedTransaction?: {
+    description: string;
+    rawDescription?: string;
+    normalizedDescription?: string;
+    externalGroupId?: string;
+    externalRecordId?: string;
+    postingDateTime?: string;
+    importSource: ImportSource;
+  };
+}
+
+export interface LinkImportedInstallmentInput {
+  number: number;
+  amount: number;
+  date: string;
+  description: string;
+  rawDescription: string;
+  normalizedDescription: string;
+  externalGroupId?: string;
+  externalRecordId: string;
+  postingDateTime?: string;
+  importSource: ImportSource;
+  importBatchId: string;
+  categoryId?: string;
 }
 
 /** Splits a total into N integer-cent installments where every parcela is
@@ -70,6 +95,12 @@ export const installmentService = {
       totalAmount: input.totalAmount,
       installmentCount: input.installmentCount,
       firstInstallmentDate: input.firstInstallmentDate,
+      trackingStartNumber: input.startNumber ?? 1,
+      currentObservedNumber: input.sourceType === "import" ? input.startNumber ?? 1 : undefined,
+      priorInstallmentsTreatment: input.startNumber && input.startNumber > 1
+        ? input.priorInstallmentsTreatment ?? "historical"
+        : undefined,
+      totalAmountEstimated: input.sourceType === "import" && (input.startNumber ?? 1) > 1,
       createdAt: now,
       updatedAt: now,
     };
@@ -83,14 +114,38 @@ export const installmentService = {
         : splitIntoCents(input.totalAmount, input.installmentCount).slice(startNumber - 1);
     const firstDate = new Date(input.firstInstallmentDate + "T00:00:00");
 
+    // Preserve the known sequence without inventing retroactive spending.
+    // These rows carry progress context only and intentionally have no
+    // transactionId.
+    for (let number = 1; number < startNumber; number++) {
+      const dueDate = toDateInputValue(addMonths(firstDate, number - startNumber));
+      const historical: Installment = {
+        id: generateId(),
+        userId,
+        installmentPlanId: plan.id,
+        cardId: input.cardId,
+        number,
+        totalInstallments: input.installmentCount,
+        amount: input.installmentAmount ?? input.totalAmount / input.installmentCount,
+        dueDate,
+        status: input.priorInstallmentsTreatment === "paid" ? "paid" : "historical",
+        createdAt: now,
+        updatedAt: now,
+      };
+      await installmentStore.create(userId, historical);
+    }
+
     for (let i = 0; i < remainingCount; i++) {
       const number = startNumber + i;
       const dueDate = toDateInputValue(addMonths(firstDate, i));
       const amount = amountsInCents[i] / 100;
 
+      const isObservedImport = input.sourceType === "import" && number === startNumber;
       const transaction = await transactionService.create(userId, {
         type: "expense",
-        description: `${input.description} ${number}/${input.installmentCount}`,
+        description: isObservedImport
+          ? input.observedTransaction?.description ?? `${input.description} ${number}/${input.installmentCount}`
+          : `${input.description} ${number}/${input.installmentCount}`,
         amount,
         date: dueDate,
         categoryId: input.categoryId,
@@ -98,8 +153,17 @@ export const installmentService = {
         cardId: input.cardId,
         paymentMethod: input.paymentMethod ?? "credito",
         recurring: false,
-        source: input.source ?? "manual",
-        importBatchId: input.importBatchId,
+        source: isObservedImport ? input.source ?? "import" : input.sourceType === "import" ? "system" : input.source ?? "manual",
+        importSource: isObservedImport ? input.observedTransaction?.importSource : undefined,
+        importBatchId: isObservedImport ? input.importBatchId : undefined,
+        externalId: isObservedImport ? input.observedTransaction?.externalRecordId : undefined,
+        externalRecordId: isObservedImport ? input.observedTransaction?.externalRecordId : undefined,
+        externalGroupId: isObservedImport ? input.observedTransaction?.externalGroupId : undefined,
+        rawDescription: isObservedImport ? input.observedTransaction?.rawDescription : undefined,
+        normalizedDescription: isObservedImport ? input.observedTransaction?.normalizedDescription : undefined,
+        postingDateTime: isObservedImport ? input.observedTransaction?.postingDateTime : undefined,
+        importedAt: isObservedImport ? now : undefined,
+        cardEntryType: "installment",
         originType: "installment",
         originId: plan.id,
         installmentPlanId: plan.id,
@@ -115,8 +179,11 @@ export const installmentService = {
         totalInstallments: input.installmentCount,
         amount,
         dueDate,
-        status: "scheduled",
+        status: isObservedImport ? "billed" : "scheduled",
         transactionId: transaction.id,
+        observedAt: isObservedImport ? now : undefined,
+        importBatchId: isObservedImport ? input.importBatchId : undefined,
+        externalRecordId: isObservedImport ? input.observedTransaction?.externalRecordId : undefined,
         createdAt: now,
         updatedAt: now,
       };
@@ -124,6 +191,114 @@ export const installmentService = {
     }
 
     return plan;
+  },
+
+  /** Replaces a future projection with the real statement line, preserving
+   * one financial Transaction for that installment. */
+  async linkImportedInstallment(
+    userId: string,
+    planId: string,
+    input: LinkImportedInstallmentInput
+  ): Promise<Installment | undefined> {
+    const plan = await planStore.get(userId, planId);
+    if (!plan) return undefined;
+    const installments = await this.installmentsForPlan(userId, planId);
+    let installment = installments.find((candidate) => candidate.number === input.number);
+
+    let transactionId = installment?.transactionId;
+    if (transactionId) {
+      await transactionService.update(userId, transactionId, {
+        type: "expense",
+        description: input.description,
+        amount: input.amount,
+        date: input.date,
+        categoryId: input.categoryId ?? plan.categoryId,
+        accountId: "",
+        cardId: plan.cardId,
+        paymentMethod: "credito",
+        recurring: false,
+        source: "import",
+        importSource: input.importSource,
+        importBatchId: input.importBatchId,
+        externalId: input.externalRecordId,
+        externalRecordId: input.externalRecordId,
+        externalGroupId: input.externalGroupId,
+        rawDescription: input.rawDescription,
+        normalizedDescription: input.normalizedDescription,
+        postingDateTime: input.postingDateTime,
+        importedAt: new Date().toISOString(),
+        cardEntryType: "installment",
+        originType: "installment",
+        originId: plan.id,
+        installmentPlanId: plan.id,
+        installmentNumber: input.number,
+      });
+    } else {
+      const transaction = await transactionService.create(userId, {
+        type: "expense",
+        description: input.description,
+        amount: input.amount,
+        date: input.date,
+        categoryId: input.categoryId ?? plan.categoryId,
+        accountId: "",
+        cardId: plan.cardId,
+        paymentMethod: "credito",
+        recurring: false,
+        source: "import",
+        importSource: input.importSource,
+        importBatchId: input.importBatchId,
+        externalId: input.externalRecordId,
+        externalRecordId: input.externalRecordId,
+        externalGroupId: input.externalGroupId,
+        rawDescription: input.rawDescription,
+        normalizedDescription: input.normalizedDescription,
+        postingDateTime: input.postingDateTime,
+        importedAt: new Date().toISOString(),
+        cardEntryType: "installment",
+        originType: "installment",
+        originId: plan.id,
+        installmentPlanId: plan.id,
+        installmentNumber: input.number,
+      });
+      transactionId = transaction.id;
+    }
+
+    const now = new Date().toISOString();
+    if (installment) {
+      installment = (await installmentStore.update(userId, installment.id, {
+        amount: input.amount,
+        dueDate: input.date,
+        status: "billed",
+        transactionId,
+        observedAt: now,
+        importBatchId: input.importBatchId,
+        externalRecordId: input.externalRecordId,
+        updatedAt: now,
+      })) as Installment;
+    } else {
+      installment = await installmentStore.create(userId, {
+        id: generateId(),
+        userId,
+        installmentPlanId: plan.id,
+        cardId: plan.cardId,
+        number: input.number,
+        totalInstallments: plan.installmentCount,
+        amount: input.amount,
+        dueDate: input.date,
+        status: "billed",
+        transactionId,
+        observedAt: now,
+        importBatchId: input.importBatchId,
+        externalRecordId: input.externalRecordId,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await planStore.update(userId, plan.id, {
+      currentObservedNumber: Math.max(plan.currentObservedNumber ?? plan.trackingStartNumber ?? 1, input.number),
+      updatedAt: now,
+    });
+    return installment;
   },
 
   async update(userId: string, id: string, patch: Partial<Pick<InstallmentPlan, "description" | "categoryId">>) {

@@ -8,7 +8,7 @@ interface TransactionDrawerProps {
   open: boolean;
   onClose: () => void;
   initial?: Transaction;
-  defaultType?: Transaction["type"];
+  defaultType?: Exclude<Transaction["type"], "payment">;
 }
 
 const FORM_ID = "transaction-form";

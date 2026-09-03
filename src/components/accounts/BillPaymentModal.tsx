@@ -31,8 +31,8 @@ export default function BillPaymentModal({ bill, onClose }: BillPaymentModalProp
   useEffect(() => {
     if (!bill) return;
     setPaymentMethod(bill.paymentMethod ?? "pix");
-    setAccountId(bill.accountId ?? bankAccounts[0]?.id ?? "");
-    setCardId(cards[0]?.id ?? "");
+    setAccountId(bill.accountId ?? "");
+    setCardId("");
     setParcelado(false);
     setInstallmentCount(2);
     setPaidAt(todayISO());

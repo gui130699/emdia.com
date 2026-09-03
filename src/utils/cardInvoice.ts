@@ -45,7 +45,7 @@ export function getCurrentInvoicePeriod(card: CreditCard, reference: Date = new 
 export function transactionsInPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod | undefined): Transaction[] {
   if (!period) return [];
   return transactions.filter((t) => {
-    if (t.cardId !== cardId) return false;
+    if (t.cardId !== cardId || t.isReversed) return false;
     const date = new Date(t.date + "T00:00:00");
     return date >= period.cycleStart && date <= period.cycleEnd;
   });
@@ -64,4 +64,70 @@ export function signedCardAmount(t: Transaction): number {
 export function invoiceTotalForPeriod(transactions: Transaction[], cardId: string, period: InvoicePeriod | undefined): number {
   if (!period) return 0;
   return transactionsInPeriod(transactions, cardId, period).reduce((sum, t) => sum + signedCardAmount(t), 0);
+}
+
+export interface CardInvoiceComposition {
+  purchaseTotal: number;
+  installmentTotal: number;
+  chargesTotal: number;
+  previousBalance: number;
+  paymentsTotal: number;
+  creditsTotal: number;
+  computedTotal: number;
+}
+
+/** Separates new consumption, financial charges, carried debt and credits.
+ * The computed position is intentionally independent from BALAMT so a
+ * difference remains visible instead of one figure silently replacing the
+ * other. */
+export function cardInvoiceComposition(transactions: Transaction[]): CardInvoiceComposition {
+  const result: CardInvoiceComposition = {
+    purchaseTotal: 0,
+    installmentTotal: 0,
+    chargesTotal: 0,
+    previousBalance: 0,
+    paymentsTotal: 0,
+    creditsTotal: 0,
+    computedTotal: 0,
+  };
+
+  for (const transaction of transactions.filter((entry) => !entry.isReversed)) {
+    switch (transaction.cardEntryType) {
+      case "installment":
+        result.installmentTotal += transaction.amount;
+        break;
+      case "interest":
+      case "tax":
+      case "penalty":
+      case "fee":
+        result.chargesTotal += transaction.amount;
+        break;
+      case "previous_balance":
+        result.previousBalance += transaction.amount;
+        break;
+      case "credit_card_payment":
+        result.paymentsTotal += transaction.amount;
+        break;
+      case "refund":
+      case "credit":
+        result.creditsTotal += transaction.amount;
+        break;
+      case "purchase":
+      case "cash_advance":
+      case "adjustment":
+      case "unknown":
+      case undefined:
+        result.purchaseTotal += transaction.amount;
+        break;
+    }
+  }
+
+  result.computedTotal =
+    result.purchaseTotal +
+    result.installmentTotal +
+    result.chargesTotal +
+    result.previousBalance -
+    result.paymentsTotal -
+    result.creditsTotal;
+  return result;
 }

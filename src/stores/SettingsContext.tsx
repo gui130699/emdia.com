@@ -18,6 +18,25 @@ interface SettingsValue {
 }
 
 const SettingsContext = createContext<SettingsValue | null>(null);
+const APPEARANCE_CACHE_KEY = "emdia:appearance";
+
+function cacheAppearance(appearance: AppearancePreferences) {
+  try {
+    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(appearance));
+  } catch {
+    // Visual cache only; IndexedDB remains the source of truth.
+  }
+}
+
+function cachedSettings(): UserSettings {
+  try {
+    const appearance = JSON.parse(localStorage.getItem(APPEARANCE_CACHE_KEY) ?? "null") as Partial<AppearancePreferences> | null;
+    if (!appearance) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, appearance: { ...DEFAULT_SETTINGS.appearance, ...appearance } };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
 
 export function useSettings(): SettingsValue {
   const ctx = useContext(SettingsContext);
@@ -58,12 +77,13 @@ function applyAccent(color: string) {
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const { currentUser } = useAuth();
   const userId = currentUser?.uid ?? "";
-  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<UserSettings>(cachedSettings);
 
   useEffect(() => {
     if (!userId) return;
     settingsService.get(userId).then((loaded) => {
       setSettings(loaded);
+      cacheAppearance(loaded.appearance);
       applyTheme(loaded.appearance.theme);
       applyDensity(loaded.appearance.density);
       applyAccent(loaded.appearance.accentColor);
@@ -81,6 +101,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       updateAppearance(patch) {
         const next = { ...settings, appearance: { ...settings.appearance, ...patch } };
         setSettings(next);
+        cacheAppearance(next.appearance);
         if (userId) settingsService.save(userId, next);
         if (patch.theme) applyTheme(next.appearance.theme);
         if (patch.density) applyDensity(next.appearance.density);

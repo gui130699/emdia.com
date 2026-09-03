@@ -6,6 +6,7 @@ import { invoiceService } from "./invoiceService";
 import { installmentService } from "./installmentService";
 import { categorizationRuleService } from "./categorizationRuleService";
 import { reconciliationAliasService } from "./reconciliationAliasService";
+import { balanceSnapshotService } from "./balanceSnapshotService";
 import { normalizeDescription } from "../utils/normalizeDescription";
 import { fingerprint } from "../utils/fingerprint";
 import { parseOfx, type ParsedOfx } from "../utils/ofxParser";
@@ -32,7 +33,7 @@ import type {
 
 /** Matches an installment pattern like "3/12", "03 / 12" or "PARC 3/10"
  * embedded in a purchase description, e.g. "NOTEBOOK 03/12". */
-const INSTALLMENT_PATTERN = /(\d{1,2})\s*\/\s*(\d{1,2})\b/;
+const INSTALLMENT_PATTERN = /(?:\b(?:parcela|parc)\s*)?(\d{1,2})\s*\/\s*(\d{1,2})\b/i;
 
 /** Classifies a card-statement line by what it actually represents — a
  * purchase, a payment received, a refund, a financial charge — so it never
@@ -55,8 +56,9 @@ export function classifyCardEntry(description: string, isCreditEntry: boolean, h
 /** A card statement line that reduces what's owed (refund, credit, a
  * payment received) should read as money coming back, not another charge —
  * everything else on a card statement is a debt-increasing entry. */
-export function cardEntryTransactionType(cardEntryType: CardEntryType | undefined): "income" | "expense" {
-  if (cardEntryType === "refund" || cardEntryType === "credit" || cardEntryType === "credit_card_payment") {
+export function cardEntryTransactionType(cardEntryType: CardEntryType | undefined): Transaction["type"] {
+  if (cardEntryType === "credit_card_payment") return "payment";
+  if (cardEntryType === "refund" || cardEntryType === "credit") {
     return "income";
   }
   return "expense";
@@ -76,6 +78,7 @@ function scoreBillMatch(
   bill: AccountBill,
   rawAmount: number,
   normalizedDescription: string,
+  transactionDate: string,
   alias?: ReconciliationAlias
 ): number {
   let score = 0;
@@ -83,12 +86,24 @@ function scoreBillMatch(
   if (amountDiff < 0.01) score += 50;
   else if (bill.amount > 0 && amountDiff / bill.amount < 0.2) score += 15;
 
-  if (alias && alias.targetType === "bill" && alias.targetId === bill.id) {
+  if (
+    alias &&
+    ((alias.targetType === "bill" && alias.targetId === bill.id) ||
+      (!!bill.recurringRuleId && alias.recurringRuleId === bill.recurringRuleId))
+  ) {
     score += 40;
   } else {
     const billWords = normalizeDescription(bill.description).split(" ").filter((w) => w.length > 2);
     if (billWords.some((w) => normalizedDescription.includes(w))) score += 15;
   }
+
+  const distanceDays = Math.abs(
+    (new Date(`${bill.dueDate}T00:00:00`).getTime() - new Date(`${transactionDate}T00:00:00`).getTime()) /
+      (24 * 60 * 60 * 1000)
+  );
+  if (distanceDays <= 3) score += 25;
+  else if (distanceDays <= 10) score += 15;
+  else if (distanceDays <= 31) score += 5;
 
   return Math.min(score, 100);
 }
@@ -121,7 +136,13 @@ export function findBillMatchCandidates(
   return unlinkedImportedExpenses(transactions)
     .map((t) => ({
       transaction: t,
-      score: scoreBillMatch(bill, t.amount, t.normalizedDescription ?? normalizeDescription(t.rawDescription ?? t.description), alias),
+      score: scoreBillMatch(
+        bill,
+        t.amount,
+        t.normalizedDescription ?? normalizeDescription(t.rawDescription ?? t.description),
+        t.date,
+        alias
+      ),
     }))
     .filter((c) => c.score >= 50)
     .map((c) => ({ ...c, level: confidenceLevelFor(c.score) }))
@@ -132,6 +153,12 @@ export function findBillMatchCandidates(
  * exact same markPaid + alias-learning path the import wizard uses, so a
  * bill reconciled here behaves identically to one reconciled during import. */
 export async function confirmBillMatch(userId: string, bill: AccountBill, transaction: Transaction): Promise<void> {
+  if (bill.recurringRuleId && Math.abs(bill.amount - transaction.amount) >= 0.01) {
+    await accountService.update(userId, bill.id, {
+      amount: transaction.amount,
+      notes: bill.notes?.replace(/^Valor estimado[^.]*\.?\s*/i, "") || undefined,
+    });
+  }
   await accountService.markPaid(userId, bill.id, {
     paymentMethod: transaction.paymentMethod,
     paidAt: transaction.date,
@@ -143,7 +170,15 @@ export async function confirmBillMatch(userId: string, bill: AccountBill, transa
     originType: "bill",
     originId: bill.id,
   });
-  await reconciliationAliasService.learn(userId, transaction.rawDescription ?? transaction.description, "bill", bill.id);
+  await reconciliationAliasService.learn(
+    userId,
+    transaction.rawDescription ?? transaction.description,
+    "bill",
+    bill.id,
+    bill.recurringRuleId,
+    undefined,
+    transaction.accountId || undefined
+  );
 }
 
 /** Undoes a match made by confirmBillMatch. Unlike reopening a payment made
@@ -182,6 +217,7 @@ export interface RawImportRow {
    * extra entropy rather than trusted alone as a unique key (see
    * classifyRows below). */
   externalGroupId?: string;
+  postingDateTime?: string;
   looksLikePaymentOrRefund?: boolean;
   /** The original statement sign, preserved separately from `type` (which
    * is forced to "expense" for every card row so invoice math treats it
@@ -201,12 +237,15 @@ export interface ImportPreviewRow {
   statusReason?: string;
   categoryId: string;
   externalId: string;
+  externalGroupId?: string;
+  postingDateTime?: string;
   selected: boolean;
   suggestion?: {
-    kind: "transfer" | "bill" | "invoice" | "installment_new";
+    kind: "transfer" | "bill" | "invoice" | "installment_new" | "installment_link";
     label: string;
     billId?: string;
     destinationAccountId?: string;
+    partnerTransactionId?: string;
     invoiceCardId?: string;
     invoicePeriod?: InvoicePeriod;
     /** The invoice's real total — may differ from the row's own amount
@@ -219,6 +258,8 @@ export interface ImportPreviewRow {
      * also be created starting mid-sequence — e.g. detected first at 4/10 —
      * without fabricating parcelas 1-3, which were never actually seen. */
     installmentStartNumber?: number;
+    installmentPlanId?: string;
+    priorInstallmentsTreatment?: "historical" | "paid";
     confirmed: boolean;
     confidenceScore?: number;
     confidenceLevel?: ConfidenceLevel;
@@ -300,6 +341,7 @@ export function ofxToRawRows(ofx: ParsedOfx): RawImportRow[] {
       amount: Math.abs(t.amount),
       type: ofx.isCreditCard ? "expense" : isCredit ? "income" : "expense",
       externalGroupId: t.fitId,
+      postingDateTime: t.datePostedTime,
       looksLikePaymentOrRefund,
       isCreditEntry: isCredit,
     };
@@ -317,6 +359,8 @@ export interface CsvColumnMapping {
   creditColumn?: string;
   debitColumn?: string;
   externalIdColumn?: string;
+  installmentNumberColumn?: string;
+  installmentCountColumn?: string;
 }
 
 /** Best-effort guess at which CSV column is which, based on common
@@ -335,6 +379,8 @@ export function guessCsvMapping(headers: string[]): Partial<CsvColumnMapping> {
     creditColumn: find([/credito/, /credit\b/, /entrada/]),
     debitColumn: find([/debito/, /debit\b/, /saida/]),
     externalIdColumn: find([/^id$/, /identificador/, /codigo/]),
+    installmentNumberColumn: find([/parcela atual/, /numero.*parcela/, /^parcela$/]),
+    installmentCountColumn: find([/total.*parcela/, /quantidade.*parcela/]),
   };
 }
 
@@ -346,11 +392,21 @@ export function csvRowsToRawRows(rows: string[][], mapping: CsvColumnMapping, he
   const creditIdx = indexOf(mapping.creditColumn);
   const debitIdx = indexOf(mapping.debitColumn);
   const idIdx = indexOf(mapping.externalIdColumn);
+  const installmentNumberIdx = indexOf(mapping.installmentNumberColumn);
+  const installmentCountIdx = indexOf(mapping.installmentCountColumn);
 
   const result: RawImportRow[] = [];
   for (const row of rows) {
     const date = dateIdx >= 0 ? parseCsvDate(row[dateIdx] ?? "") : undefined;
-    const description = descIdx >= 0 ? (row[descIdx] ?? "").trim() : "";
+    let description = descIdx >= 0 ? (row[descIdx] ?? "").trim() : "";
+    const installmentNumber = installmentNumberIdx >= 0 ? Number(row[installmentNumberIdx]) : undefined;
+    const installmentCount = installmentCountIdx >= 0 ? Number(row[installmentCountIdx]) : undefined;
+    if (
+      installmentNumber && installmentCount && installmentNumber <= installmentCount &&
+      !INSTALLMENT_PATTERN.test(description)
+    ) {
+      description = `${description} ${installmentNumber}/${installmentCount}`;
+    }
     if (!date || !description) continue;
 
     let amount: number | undefined;
@@ -418,6 +474,80 @@ export function qifToRawRows(qif: ParsedQif): RawImportRow[] {
 // Classification: dedup, category suggestion, bill/transfer linking
 // ---------------------------------------------------------------------------
 
+function descriptionTokens(value: string): Set<string> {
+  return new Set(
+    normalizeDescription(value)
+      .split(" ")
+      .filter((token) => token.length > 2 && !/^(parc|parcela|compra)$/.test(token))
+  );
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = descriptionTokens(left);
+  const rightTokens = descriptionTokens(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const common = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return common / union;
+}
+
+function scoreInstallmentPlan(
+  plan: InstallmentPlan,
+  planInstallments: Installment[],
+  cardId: string,
+  baseDescription: string,
+  number: number,
+  amount: number,
+  date: string
+): number {
+  if (plan.cardId !== cardId || plan.installmentCount < number) return 0;
+  let score = 0;
+  const similarity = tokenSimilarity(plan.description, baseDescription);
+  if (similarity >= 0.8) score += 50;
+  else if (similarity >= 0.5) score += 35;
+  else if (similarity > 0) score += 15;
+
+  const expected = planInstallments.find((installment) => installment.number === number);
+  const expectedAmount = expected?.amount ?? plan.totalAmount / plan.installmentCount;
+  if (Math.abs(expectedAmount - amount) < 0.02) score += 35;
+  else if (expectedAmount > 0 && Math.abs(expectedAmount - amount) / expectedAmount <= 0.05) score += 20;
+
+  if (expected) {
+    const distance = Math.abs(
+      new Date(`${expected.dueDate}T00:00:00`).getTime() - new Date(`${date}T00:00:00`).getTime()
+    ) / (24 * 60 * 60 * 1000);
+    if (distance <= 5) score += 15;
+    else if (distance <= 35) score += 8;
+  }
+  return Math.min(score, 100);
+}
+
+function scoreInvoicePayment(
+  entry: { card: CreditCard; period: InvoicePeriod; total: number },
+  amount: number,
+  date: string,
+  normalizedDescription: string
+): number {
+  let score = 0;
+  const difference = Math.abs(entry.total - amount);
+  if (difference < 0.02) score += 55;
+  else if (entry.total > 0 && difference / entry.total <= 0.05) score += 30;
+
+  const distance = Math.abs(
+    entry.period.dueDate.getTime() - new Date(`${date}T00:00:00`).getTime()
+  ) / (24 * 60 * 60 * 1000);
+  if (distance <= 3) score += 20;
+  else if (distance <= 10) score += 12;
+  else if (distance <= 31) score += 5;
+
+  const cardSignals = [entry.card.name, entry.card.institution, entry.card.lastFourDigits]
+    .map(normalizeDescription)
+    .filter(Boolean);
+  if (cardSignals.some((signal) => normalizedDescription.includes(signal))) score += 20;
+  if (/fatura|cartao|pagamento/.test(normalizedDescription)) score += 10;
+  return Math.min(score, 100);
+}
+
 async function classifyRows(
   ctx: ImportContext,
   fileType: ImportSource,
@@ -426,7 +556,11 @@ async function classifyRows(
   const scopedExisting = ctx.existingTransactions.filter(
     (t) => (ctx.target.accountId && t.accountId === ctx.target.accountId) || (ctx.target.cardId && t.cardId === ctx.target.cardId)
   );
-  const existingExternalIds = new Set(scopedExisting.map((t) => t.externalId).filter(Boolean));
+  const existingExternalIds = new Set(
+    scopedExisting.flatMap((transaction) =>
+      [transaction.externalRecordId, transaction.externalId].filter((id): id is string => !!id)
+    )
+  );
   const seenInThisBatch = new Set<string>();
 
   const otherAccountTransactions = ctx.target.accountId
@@ -521,9 +655,13 @@ async function classifyRows(
       status = "needsReview";
       statusReason = "Parece ser um pagamento ou estorno de fatura — verifique antes de importar como compra.";
     } else if (raw.type === "expense" && ctx.target.accountId) {
-      const alias = await reconciliationAliasService.findForDescription(ctx.userId, raw.description);
+      const alias = await reconciliationAliasService.findForDescription(
+        ctx.userId,
+        raw.description,
+        ctx.target.accountId
+      );
       const scored = unpaidBills
-        .map((b) => ({ bill: b, score: scoreBillMatch(b, raw.amount, normalizedDescription, alias) }))
+        .map((b) => ({ bill: b, score: scoreBillMatch(b, raw.amount, normalizedDescription, raw.date, alias) }))
         .filter((s) => s.score >= 70)
         .sort((a, b) => b.score - a.score);
 
@@ -547,26 +685,30 @@ async function classifyRows(
     }
 
     if (!suggestion && raw.type === "expense" && ctx.target.accountId && /fatura|cartao|pagamento/.test(normalizedDescription)) {
-      const invoiceMatch = openInvoiceByCard.find(
-        (entry) =>
-          Math.abs(entry.total - raw.amount) < 0.02 &&
-          (normalizedDescription.includes(normalizeDescription(entry.card.name).split(" ")[0]) ||
-            normalizedDescription.includes("fatura") ||
-            normalizedDescription.includes("pagamento"))
-      );
+      const scoredInvoices = openInvoiceByCard
+        .map((entry) => ({ entry, score: scoreInvoicePayment(entry, raw.amount, raw.date, normalizedDescription) }))
+        .filter((candidate) => candidate.score >= 50)
+        .sort((left, right) => right.score - left.score);
+      const invoiceMatch = scoredInvoices[0];
       if (invoiceMatch) {
-        const exactAmount = Math.abs(invoiceMatch.total - raw.amount) < 0.02;
-        const score = (exactAmount ? 60 : 30) + (normalizedDescription.includes("fatura") ? 20 : 0) + 20;
+        const ambiguous =
+          scoredInvoices.length > 1 &&
+          scoredInvoices[1].score >= invoiceMatch.score - 5 &&
+          scoredInvoices[1].entry.card.id !== invoiceMatch.entry.card.id;
+        const level = confidenceLevelFor(invoiceMatch.score);
         status = "needsReview";
         suggestion = {
           kind: "invoice",
-          invoiceCardId: invoiceMatch.card.id,
-          invoicePeriod: invoiceMatch.period,
-          invoiceTotal: invoiceMatch.invoiceTotal,
-          label: `Este lançamento pode ser o pagamento da fatura do cartão "${invoiceMatch.card.name}".`,
-          confirmed: score >= 90,
-          confidenceScore: score,
-          confidenceLevel: confidenceLevelFor(score),
+          invoiceCardId: invoiceMatch.entry.card.id,
+          invoicePeriod: invoiceMatch.entry.period,
+          invoiceTotal: invoiceMatch.entry.invoiceTotal,
+          label: ambiguous
+            ? `Há mais de uma fatura compatível com este pagamento. Confirme o cartão antes de vincular.`
+            : `Este lançamento pode ser o pagamento da fatura do cartão "${invoiceMatch.entry.card.name}".`,
+          confirmed: level === "high" && !ambiguous,
+          confidenceScore: invoiceMatch.score,
+          confidenceLevel: level,
+          ambiguous,
         };
       }
     }
@@ -583,6 +725,7 @@ async function classifyRows(
         suggestion = {
           kind: "transfer",
           destinationAccountId: partner.accountId,
+          partnerTransactionId: partner.id,
           label: `Possível transferência entre suas contas (${ctx.bankAccounts.find((a) => a.id === partner.accountId)?.name ?? "outra conta"}).`,
           confirmed: false,
         };
@@ -596,23 +739,60 @@ async function classifyRows(
         const number = Number(patternMatch[1]);
         const total = Number(patternMatch[2]);
         if (number >= 1 && total >= 2 && number <= total) {
-          const baseDescription = raw.description.replace(INSTALLMENT_PATTERN, "").replace(/\s{2,}/g, " ").trim();
-          const normalizedBase = normalizeDescription(baseDescription);
-
-          const existingPlan = ctx.installmentPlans.find(
-            (p) =>
-              p.cardId === ctx.target.cardId &&
-              p.installmentCount === total &&
-              normalizeDescription(p.description).includes(normalizedBase.split(" ")[0] ?? "")
-          );
+          const baseDescription = raw.description
+            .replace(INSTALLMENT_PATTERN, "")
+            .replace(/[\s-]+$/g, "")
+            .replace(/\s{2,}/g, " ")
+            .trim();
+          const scoredPlans = ctx.installmentPlans
+            .filter((plan) => plan.cardId === ctx.target.cardId && plan.installmentCount === total)
+            .map((plan) => ({
+              plan,
+              score: scoreInstallmentPlan(
+                plan,
+                ctx.installments.filter((installment) => installment.installmentPlanId === plan.id),
+                ctx.target.cardId!,
+                baseDescription,
+                number,
+                raw.amount,
+                raw.date
+              ),
+            }))
+            .filter((candidate) => candidate.score >= 50)
+            .sort((left, right) => right.score - left.score);
+          const ambiguousPlan = scoredPlans.length > 1 && scoredPlans[1].score >= scoredPlans[0].score - 8;
+          const existingPlan = !ambiguousPlan && scoredPlans[0]?.score >= 70 ? scoredPlans[0].plan : undefined;
           const existingInstallment = existingPlan
             ? ctx.installments.find((i) => i.installmentPlanId === existingPlan.id && i.number === number)
             : undefined;
+          const existingTransaction = existingInstallment?.transactionId
+            ? ctx.existingTransactions.find((transaction) => transaction.id === existingInstallment.transactionId)
+            : undefined;
 
-          if (existingInstallment?.transactionId) {
+          if (
+            existingInstallment &&
+            (existingInstallment.externalRecordId === externalId || existingTransaction?.externalRecordId === externalId)
+          ) {
             status = "duplicate";
             statusReason = `Esta parcela (${number}/${total}) já está registrada no parcelamento "${existingPlan!.description}".`;
             installmentMatch = { number, total, baseDescription, existingPlanId: existingPlan!.id };
+          } else if (existingPlan && (!existingInstallment || existingInstallment.status === "scheduled")) {
+            const score = scoredPlans[0].score;
+            status = "needsReview";
+            suggestion = {
+              kind: "installment_link",
+              label: `Vincular a parcela ${number}/${total} ao parcelamento "${existingPlan.description}".`,
+              installmentPlanId: existingPlan.id,
+              installmentStartNumber: number,
+              confirmed: score >= 90,
+              confidenceScore: score,
+              confidenceLevel: confidenceLevelFor(score),
+            };
+            installmentMatch = { number, total, baseDescription, existingPlanId: existingPlan.id };
+          } else if (existingPlan && existingInstallment) {
+            status = "duplicate";
+            statusReason = `A posição ${number}/${total} já foi observada no parcelamento "${existingPlan.description}".`;
+            installmentMatch = { number, total, baseDescription, existingPlanId: existingPlan.id };
           } else if (!existingPlan && !suggestion) {
             // Not just number === 1 — a real statement can be imported for
             // the first time on ANY parcela of an ongoing purchase (e.g. the
@@ -629,7 +809,9 @@ async function classifyRows(
               installmentCount: total,
               installmentStartNumber: number,
               installmentTotalAmount: Math.round(raw.amount * total * 100) / 100,
+              priorInstallmentsTreatment: "historical",
               confirmed: false,
+              ambiguous: ambiguousPlan,
             };
             installmentMatch = { number, total, baseDescription };
           } else {
@@ -655,9 +837,11 @@ async function classifyRows(
       statusReason,
       categoryId,
       externalId,
+      externalGroupId: raw.externalGroupId,
+      postingDateTime: raw.postingDateTime,
       selected:
         status === "valid" ||
-        ((suggestion?.kind === "bill" || suggestion?.kind === "invoice") && suggestion.confirmed),
+        (!!suggestion?.confirmed && suggestion.kind !== "installment_new"),
       suggestion,
       installmentMatch,
       cardEntryType,
@@ -693,14 +877,15 @@ export async function buildCsvPreview(
   fileName: string,
   headers: string[],
   csvRows: string[][],
-  mapping: CsvColumnMapping
+  mapping: CsvColumnMapping,
+  fileType: Extract<ImportSource, "csv" | "xls" | "xlsx" | "txt"> = "csv"
 ): Promise<ImportPreview> {
   const rawRows = csvRowsToRawRows(csvRows, mapping, headers);
-  const rows = await classifyRows(ctx, "csv", rawRows);
+  const rows = await classifyRows(ctx, fileType, rawRows);
   const dates = rawRows.map((r) => r.date).sort();
   return {
     fileName,
-    fileType: "csv",
+    fileType,
     periodStart: dates[0],
     periodEnd: dates[dates.length - 1],
     rows,
@@ -748,11 +933,30 @@ export const importService = {
     const batchId = generateId();
     let newRecords = 0;
     let reviewRecords = 0;
+    const existingRecordIds = new Set(
+      (await transactionService.list(userId)).flatMap((transaction) =>
+        [transaction.externalRecordId, transaction.externalId].filter((id): id is string => !!id)
+      )
+    );
 
     for (const row of selectedRows) {
       if (row.status === "duplicate" || row.status === "invalid") continue;
+      // Preview state can be stale during multi-file imports. Revalidate at
+      // commit time so another file/tab cannot insert the same line between
+      // preview and confirmation.
+      if (existingRecordIds.has(row.externalId)) continue;
 
       if (row.suggestion?.kind === "bill" && row.suggestion.confirmed && row.suggestion.billId) {
+        const matchedBillBeforePayment = await accountService.get(userId, row.suggestion.billId);
+        if (
+          matchedBillBeforePayment?.recurringRuleId &&
+          Math.abs(matchedBillBeforePayment.amount - row.amount) >= 0.01
+        ) {
+          await accountService.update(userId, matchedBillBeforePayment.id, {
+            amount: row.amount,
+            notes: matchedBillBeforePayment.notes?.replace(/^Valor estimado[^.]*\.?\s*/i, "") || undefined,
+          });
+        }
         const transaction = await transactionService.create(userId, {
           type: "expense",
           description: `Pagamento — ${row.description}`,
@@ -768,6 +972,9 @@ export const importService = {
           originType: "bill",
           originId: row.suggestion.billId,
           externalId: row.externalId,
+          externalRecordId: row.externalId,
+          externalGroupId: row.externalGroupId,
+          postingDateTime: row.postingDateTime,
           rawDescription: row.rawDescription,
           normalizedDescription: row.normalizedDescription,
           importedAt: new Date().toISOString(),
@@ -779,7 +986,16 @@ export const importService = {
           paidAccountId: target.accountId,
           paymentTransactionId: transaction.id,
         });
-        await reconciliationAliasService.learn(userId, row.rawDescription, "bill", row.suggestion.billId);
+        const matchedBill = await accountService.get(userId, row.suggestion.billId);
+        await reconciliationAliasService.learn(
+          userId,
+          row.rawDescription,
+          "bill",
+          row.suggestion.billId,
+          matchedBill?.recurringRuleId,
+          undefined,
+          target.accountId
+        );
         newRecords++;
         continue;
       }
@@ -788,13 +1004,13 @@ export const importService = {
         const existingInvoice = await invoiceService.findByPeriod(userId, row.suggestion.invoiceCardId, row.suggestion.invoicePeriod.periodKey);
         const invoiceId = existingInvoice?.id ?? generateId();
         const transaction = await transactionService.create(userId, {
-          type: "expense",
+          type: "payment",
           description: `Pagamento de fatura — ${row.description}`,
           amount: row.amount,
           date: row.date,
           categoryId: "",
           accountId: target.accountId ?? "",
-          cardId: row.suggestion.invoiceCardId,
+          relatedCardId: row.suggestion.invoiceCardId,
           paymentMethod: "debito",
           recurring: false,
           source: "import",
@@ -803,6 +1019,9 @@ export const importService = {
           originType: "credit_card_invoice",
           originId: invoiceId,
           externalId: row.externalId,
+          externalRecordId: row.externalId,
+          externalGroupId: row.externalGroupId,
+          postingDateTime: row.postingDateTime,
           rawDescription: row.rawDescription,
           normalizedDescription: row.normalizedDescription,
           importedAt: new Date().toISOString(),
@@ -815,7 +1034,9 @@ export const importService = {
           row.amount,
           target.accountId ?? "",
           transaction.id,
-          invoiceId
+          invoiceId,
+          "import",
+          row.date
         );
         // A partial payment doesn't settle any specific parcela — only mark
         // installments paid once the invoice is fully covered.
@@ -848,12 +1069,49 @@ export const importService = {
           paymentMethod: "credito",
           source: "import",
           importBatchId: batchId,
+          priorInstallmentsTreatment: row.suggestion.priorInstallmentsTreatment ?? "historical",
+          observedTransaction: {
+            description: row.description,
+            rawDescription: row.rawDescription,
+            normalizedDescription: row.normalizedDescription,
+            externalGroupId: row.externalGroupId,
+            externalRecordId: row.externalId,
+            postingDateTime: row.postingDateTime,
+            importSource: preview.fileType,
+          },
         });
         newRecords++;
+        existingRecordIds.add(row.externalId);
+        continue;
+      }
+
+      if (
+        row.suggestion?.kind === "installment_link" &&
+        row.suggestion.confirmed &&
+        row.suggestion.installmentPlanId &&
+        row.installmentMatch
+      ) {
+        await installmentService.linkImportedInstallment(userId, row.suggestion.installmentPlanId, {
+          number: row.installmentMatch.number,
+          amount: row.amount,
+          date: row.date,
+          description: row.description,
+          rawDescription: row.rawDescription,
+          normalizedDescription: row.normalizedDescription,
+          externalGroupId: row.externalGroupId,
+          externalRecordId: row.externalId,
+          postingDateTime: row.postingDateTime,
+          importSource: preview.fileType,
+          importBatchId: batchId,
+          categoryId: row.categoryId,
+        });
+        newRecords++;
+        existingRecordIds.add(row.externalId);
         continue;
       }
 
       if (row.suggestion?.kind === "transfer" && row.suggestion.confirmed && row.suggestion.destinationAccountId) {
+        const transferId = generateId();
         await transactionService.create(userId, {
           type: "transfer",
           description: row.description,
@@ -862,18 +1120,30 @@ export const importService = {
           categoryId: "",
           accountId: target.accountId ?? "",
           destinationAccountId: row.suggestion.destinationAccountId,
-          transferId: generateId(),
+          transferId,
           paymentMethod: "transferencia",
           recurring: false,
           source: "import",
           importSource: preview.fileType,
           importBatchId: batchId,
           externalId: row.externalId,
+          externalRecordId: row.externalId,
+          externalGroupId: row.externalGroupId,
+          postingDateTime: row.postingDateTime,
           rawDescription: row.rawDescription,
           normalizedDescription: row.normalizedDescription,
           importedAt: new Date().toISOString(),
         });
+        if (row.suggestion.partnerTransactionId) {
+          await transactionService.update(userId, row.suggestion.partnerTransactionId, {
+            isReversed: true,
+            reversedAt: new Date().toISOString(),
+            originType: "transfer",
+            originId: transferId,
+          });
+        }
         newRecords++;
+        existingRecordIds.add(row.externalId);
         continue;
       }
 
@@ -894,11 +1164,15 @@ export const importService = {
         importSource: preview.fileType,
         importBatchId: batchId,
         externalId: row.externalId,
+        externalRecordId: row.externalId,
+        externalGroupId: row.externalGroupId,
+        postingDateTime: row.postingDateTime,
         rawDescription: row.rawDescription,
         normalizedDescription: row.normalizedDescription,
         importedAt: new Date().toISOString(),
       });
       newRecords++;
+      existingRecordIds.add(row.externalId);
     }
 
     const now = new Date().toISOString();
@@ -949,6 +1223,14 @@ export const importService = {
 
     for (const t of imported) {
       await transactionService.remove(userId, t.id);
+    }
+    const snapshots = await balanceSnapshotService.list(userId);
+    for (const snapshot of snapshots.filter((item) => item.importBatchId === batchId)) {
+      await balanceSnapshotService.remove(userId, snapshot.id);
+    }
+    const invoices = await invoiceService.list(userId);
+    for (const invoice of invoices.filter((item) => item.importBatchId === batchId)) {
+      await invoiceService.remove(userId, invoice.id);
     }
     await batchStore.update(userId, batchId, { status: "undone" });
     return { ok: true };

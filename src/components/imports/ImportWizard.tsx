@@ -1,12 +1,19 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { X, Upload, CheckCircle2, AlertTriangle, Copy, Landmark, CreditCard as CreditCardIcon } from "lucide-react";
 import Badge from "../ui/Badge";
 import FormField from "../ui/FormField";
 import CurrencyInput from "../ui/CurrencyInput";
+import BankSelect from "../institutions/BankSelect";
 import { inputClass } from "../ui/formStyles";
 import { useFinanceData } from "../../stores/FinanceDataContext";
 import { useToast } from "../../stores/ToastContext";
 import { useAuth } from "../../contexts/AuthContext";
+import { transactionService } from "../../services/transactionService";
+import { accountService } from "../../services/accountService";
+import { bankAccountService } from "../../services/bankAccountService";
+import { cardService } from "../../services/cardService";
+import { invoiceService } from "../../services/invoiceService";
+import { installmentService } from "../../services/installmentService";
 import { formatCurrency } from "../../utils/currency";
 import { formatDate, todayISO } from "../../utils/date";
 import {
@@ -16,7 +23,6 @@ import {
   detectCsvColumnSignature,
   findInstitutionByOfxBankId,
   guessCsvMapping,
-  parseCsvFile,
   parseOfxFile,
   parseQifFile,
   importService,
@@ -24,9 +30,11 @@ import {
   type ImportPreview,
   type ImportPreviewRow,
 } from "../../services/importService";
+import { parseFinancialFile, type FinancialFileFormat } from "../../utils/financialFileParser";
 import type { ParsedOfx } from "../../utils/ofxParser";
 import type { ParsedQif } from "../../utils/qifParser";
 import type { BankAccountKind, ImportRecordStatus } from "../../types/finance";
+import type { FinancialInstitution } from "../../types/institution";
 
 interface ImportWizardProps {
   open: boolean;
@@ -63,12 +71,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const {
     bankAccounts,
     cards,
-    transactions,
-    bills,
     categories,
-    invoices,
-    installmentPlans,
-    installments,
     addBankAccount,
     addCard,
     reconcileAccountBalance,
@@ -79,6 +82,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const { show } = useToast();
   const { currentUser } = useAuth();
   const userId = currentUser?.uid ?? "";
+  const [effectiveMode, setEffectiveMode] = useState<"account" | "card">(mode);
 
   const [step, setStep] = useState<Step>("select");
   const [targetAccountId, setTargetAccountId] = useState(fixedAccountId ?? "");
@@ -97,7 +101,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [fileQueue, setFileQueue] = useState<File[]>([]);
   const [queueTotal, setQueueTotal] = useState(0);
 
-  const [fileName, setFileName] = useState("");
+  const fileNameRef = useRef("");
+  const [fileFormat, setFileFormat] = useState<FinancialFileFormat>("csv");
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvRows, setCsvRows] = useState<string[][]>([]);
   const [mapping, setMapping] = useState<CsvColumnMapping>({ dateColumn: "", descriptionColumn: "" });
@@ -107,13 +112,14 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [lastOfx, setLastOfx] = useState<ParsedOfx | null>(null);
   const [lastQif, setLastQif] = useState<ParsedQif | null>(null);
   const [committedBatchId, setCommittedBatchId] = useState<string | null>(null);
-  const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" | "initial_reference" } | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ calculated?: number; reported: number; difference?: number; status: "conferred" | "discrepancy" | "initial_reference" } | null>(null);
   const [correctedBalance, setCorrectedBalance] = useState(0);
   const [cardStatement, setCardStatement] = useState<{ computedTotal: number; statementBalance: number; difference: number } | null>(null);
 
   // "match" step (OFX account/card imports)
   const [detectedCode, setDetectedCode] = useState<string | undefined>();
   const [detectedName, setDetectedName] = useState<string | undefined>();
+  const [selectedInstitution, setSelectedInstitution] = useState<FinancialInstitution | null>(null);
   const [candidateAccountId, setCandidateAccountId] = useState<string | undefined>();
   const [choosingOther, setChoosingOther] = useState(false);
   const [otherAccountId, setOtherAccountId] = useState("");
@@ -138,11 +144,13 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [newCardLastFour, setNewCardLastFour] = useState("");
 
   const creditCards = cards.filter((c) => c.type === "credito");
-  const target = mode === "card" ? { cardId: targetCardId } : { accountId: targetAccountId };
+  const target = effectiveMode === "card" ? { cardId: targetCardId } : { accountId: targetAccountId };
 
   function reset() {
     setStep("select");
-    setFileName("");
+    setEffectiveMode(mode);
+    fileNameRef.current = "";
+    setFileFormat("csv");
     setCsvHeaders([]);
     setCsvRows([]);
     setPreview(null);
@@ -153,6 +161,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setReconciliation(null);
     setDetectedCode(undefined);
     setDetectedName(undefined);
+    setSelectedInstitution(null);
     setCandidateAccountId(undefined);
     setCandidateCardId(undefined);
     setChoosingOther(false);
@@ -187,25 +196,36 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setFileQueue((prev) => prev.slice(1));
     reset();
     if (next) {
-      void handleFile(next);
+      void handleFile(next, mode, true);
     } else {
       setQueueTotal(0);
       onClose();
     }
   }
 
-  function buildCtx(explicitTarget: { accountId?: string; cardId?: string }, extraAccounts: typeof bankAccounts = [], extraCards: typeof cards = []) {
+  async function buildCtx(explicitTarget: { accountId?: string; cardId?: string }, extraAccounts: typeof bankAccounts = [], extraCards: typeof cards = []) {
+    const [freshTransactions, freshBills, freshAccounts, freshCards, freshInvoices, freshPlans, freshInstallments] = await Promise.all([
+      transactionService.list(userId),
+      accountService.list(userId),
+      bankAccountService.list(userId),
+      cardService.list(userId),
+      invoiceService.list(userId),
+      installmentService.listPlans(userId),
+      installmentService.listInstallments(userId),
+    ]);
+    const mergeById = <T extends { id: string }>(current: T[], extra: T[]) =>
+      Array.from(new Map([...current, ...extra].map((item) => [item.id, item])).values());
     return {
       userId,
       target: explicitTarget,
-      existingTransactions: transactions,
-      bills,
-      bankAccounts: [...bankAccounts, ...extraAccounts],
+      existingTransactions: freshTransactions,
+      bills: freshBills,
+      bankAccounts: mergeById(freshAccounts, extraAccounts),
       categories,
-      cards: [...cards, ...extraCards],
-      invoices,
-      installmentPlans,
-      installments,
+      cards: mergeById(freshCards, extraCards),
+      invoices: freshInvoices,
+      installmentPlans: freshPlans,
+      installments: freshInstallments,
     };
   }
 
@@ -216,8 +236,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     extraCards: typeof cards = []
   ) {
     setLoadingLabel("Verificando duplicidades...");
-    const ctx = buildCtx(resolvedTarget, extraAccounts, extraCards);
-    const result = await buildOfxPreview(ctx, fileName, ofx);
+    const ctx = await buildCtx(resolvedTarget, extraAccounts, extraCards);
+    const result = await buildOfxPreview(ctx, fileNameRef.current, ofx);
     setPreview(result);
     setRows(result.rows);
     if (resolvedTarget.accountId) setTargetAccountId(resolvedTarget.accountId);
@@ -226,13 +246,16 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setLoadingLabel("");
   }
 
-  function proceedWithOfx(ofx: ParsedOfx) {
+  function proceedWithOfx(ofx: ParsedOfx, productMode: "account" | "card" = effectiveMode) {
     const institution = findInstitutionByOfxBankId(ofx.bankId, ofx.org);
-    setDetectedCode(institution?.code ?? ofx.bankId);
+    setDetectedCode(institution?.code);
     setDetectedName(institution?.name);
+    setSelectedInstitution(institution ?? null);
+    const accountType = ofx.accountType?.toUpperCase();
+    setNewAccountKind(accountType === "SAVINGS" ? "poupanca" : accountType === "CHECKING" ? "corrente" : "outro");
 
-    if (mode === "card") {
-      if (fixedCardId) {
+    if (productMode === "card") {
+      if (fixedCardId && mode === "card") {
         void runOfxPreview({ cardId: fixedCardId }, ofx);
         return;
       }
@@ -245,14 +268,14 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
         ? creditCards.filter((c) => c.institutionCode === (institution?.code ?? ofx.bankId))
         : [];
       setCandidateCardId(byInstitution.length === 1 ? byInstitution[0].id : undefined);
-      setNewCardName(institution?.name ?? "Novo cartão");
+      setNewCardName(institution?.name ?? "");
       setNewCardLastFour(ofx.accountId && /\d{4}$/.test(ofx.accountId) ? ofx.accountId.slice(-4) : "");
       setLoadingLabel("");
       setStep("match");
       return;
     }
 
-    if (fixedAccountId) {
+    if (fixedAccountId && mode === "account") {
       void runOfxPreview({ accountId: fixedAccountId }, ofx);
       return;
     }
@@ -265,45 +288,46 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       ? bankAccounts.filter((a) => a.institutionCode === (institution?.code ?? ofx.bankId))
       : [];
     setCandidateAccountId(byInstitution.length === 1 ? byInstitution[0].id : undefined);
-    setNewAccountName(institution?.name ?? "Nova conta");
+    setNewAccountName(institution?.name ?? "");
     setLoadingLabel("");
     setStep("match");
   }
 
-  async function handleFile(file: File) {
-    setFileName(file.name);
+  async function handleFile(file: File, requestedMode: "account" | "card" = effectiveMode, freshFlow = false) {
+    setEffectiveMode(requestedMode);
+    fileNameRef.current = file.name;
     setLoadingLabel("Lendo arquivo...");
     try {
-      const text = await file.text();
-      const isOfx = /\.ofx$/i.test(file.name);
-      const isQif = /\.qif$/i.test(file.name);
+      const parsedFile = await parseFinancialFile(file);
+      setFileFormat(parsedFile.format);
 
-      if (isQif) {
+      if (parsedFile.format === "qif") {
         setLoadingLabel("Analisando arquivo...");
-        const qif = parseQifFile(text);
+        const qif = parseQifFile(parsedFile.text ?? "");
         setLastQif(qif);
         setLoadingLabel("");
-        if (mode === "account" && !fixedAccountId && !targetAccountId) {
+        if (requestedMode === "account" && !fixedAccountId && (freshFlow || !targetAccountId)) {
           setStep("choose-account");
-        } else if (mode === "card" && !fixedCardId && !targetCardId) {
+        } else if (requestedMode === "card" && !fixedCardId && (freshFlow || !targetCardId)) {
           setStep("choose-card");
         } else {
-          await runQifPreview(mode === "card" ? { cardId: targetCardId || fixedCardId } : { accountId: targetAccountId || fixedAccountId });
+          await runQifPreview(requestedMode === "card" ? { cardId: freshFlow ? fixedCardId : targetCardId || fixedCardId } : { accountId: freshFlow ? fixedAccountId : targetAccountId || fixedAccountId });
         }
         return;
       }
 
-      if (!isOfx) {
-        await handleCsvFile(text);
+      if (parsedFile.format !== "ofx") {
+        if (!parsedFile.tabular) throw new Error("Tabela financeira não reconhecida.");
+        await handleCsvFile(parsedFile.tabular.headers, parsedFile.tabular.rows, parsedFile.format, requestedMode, freshFlow);
         return;
       }
 
       setLoadingLabel("Analisando arquivo...");
-      const ofx = parseOfxFile(text);
+      const ofx = parseOfxFile(parsedFile.text ?? "");
       setLastOfx(ofx);
 
-      const expectsCard = mode === "card";
-      if (ofx.isCreditCard !== expectsCard) {
+      const detectedMode = ofx.financialProduct === "credit_card" ? "card" : ofx.financialProduct === "bank_account" ? "account" : "unknown";
+      if (detectedMode === "unknown" || detectedMode !== requestedMode) {
         setLoadingLabel("");
         setStep("product-uncertain");
         return;
@@ -316,50 +340,67 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     }
   }
 
-  function confirmProductAnyway() {
-    if (lastOfx) proceedWithOfx(lastOfx);
+  function chooseProduct(productMode: "account" | "card") {
+    if (!lastOfx) return;
+    setEffectiveMode(productMode);
+    proceedWithOfx(lastOfx, productMode);
   }
 
   async function runQifPreview(resolvedTarget: { accountId?: string; cardId?: string }) {
     if (!lastQif) return;
     setLoadingLabel("Verificando duplicidades...");
-    const ctx = buildCtx(resolvedTarget);
-    const result = await buildQifPreview(ctx, fileName, lastQif);
+    const ctx = await buildCtx(resolvedTarget);
+    const result = await buildQifPreview(ctx, fileNameRef.current, lastQif);
     setPreview(result);
     setRows(result.rows);
     setLoadingLabel("");
     setStep("preview");
   }
 
-  async function handleCsvFile(text: string) {
-    const { headers, rows: parsedRows } = parseCsvFile(text);
-    const guess = guessCsvMapping(headers);
+  async function handleCsvFile(headers: string[], parsedRows: string[][], format: FinancialFileFormat, productMode: "account" | "card", freshFlow = false) {
+    const signature = detectCsvColumnSignature(headers);
+    const saved = (await importService.listMappings(userId)).find(
+      (item) => item.columnSignature === signature && item.fileType === format
+    );
+    const guess: Partial<CsvColumnMapping> = saved
+      ? {
+          dateColumn: saved.dateColumn,
+          descriptionColumn: saved.descriptionColumn,
+          amountColumn: saved.amountColumn,
+          creditColumn: saved.creditColumn,
+          debitColumn: saved.debitColumn,
+          externalIdColumn: saved.externalIdColumn,
+          installmentNumberColumn: saved.installmentNumberColumn,
+          installmentCountColumn: saved.installmentCountColumn,
+        }
+      : guessCsvMapping(headers);
     setCsvHeaders(headers);
     setCsvRows(parsedRows);
     setLoadingLabel("");
 
-    if (mode === "account" && !fixedAccountId && !targetAccountId) {
+    if (productMode === "account" && !fixedAccountId && (freshFlow || !targetAccountId)) {
       setStep("choose-account");
       return;
     }
-    if (mode === "card" && !fixedCardId && !targetCardId) {
+    if (productMode === "card" && !fixedCardId && (freshFlow || !targetCardId)) {
       setStep("choose-card");
       return;
     }
 
     if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
-      await commitCsvPreview(headers, parsedRows, guess as CsvColumnMapping);
+      await commitCsvPreview(headers, parsedRows, guess as CsvColumnMapping, format, productMode);
     } else {
       setMapping({ dateColumn: guess.dateColumn ?? "", descriptionColumn: guess.descriptionColumn ?? "", amountColumn: guess.amountColumn });
       setStep("mapping");
     }
   }
 
-  async function commitCsvPreview(headers: string[], parsedRows: string[][], m: CsvColumnMapping) {
+  async function commitCsvPreview(headers: string[], parsedRows: string[][], m: CsvColumnMapping, format: FinancialFileFormat = fileFormat, productMode: "account" | "card" = effectiveMode) {
     setLoadingLabel("Verificando duplicidades...");
-    const resolvedTarget = mode === "card" ? { cardId: targetCardId || fixedCardId } : { accountId: targetAccountId || fixedAccountId };
-    const ctx = buildCtx(resolvedTarget);
-    const result = await buildCsvPreview(ctx, fileName, headers, parsedRows, m);
+    const resolvedTarget = productMode === "card" ? { cardId: targetCardId || fixedCardId } : { accountId: targetAccountId || fixedAccountId };
+    const ctx = await buildCtx(resolvedTarget);
+    const tabularFormat = format === "xls" || format === "xlsx" || format === "txt" ? format : "csv";
+    const result = await buildCsvPreview(ctx, fileNameRef.current, headers, parsedRows, m, tabularFormat);
     setPreview(result);
     setRows(result.rows);
     setLoadingLabel("");
@@ -414,7 +455,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   }
 
   async function handleCreateAccountForOfx() {
-    if (!lastOfx || !newAccountName.trim()) return;
+    if (!lastOfx || !newAccountName.trim() || !selectedInstitution) return;
     setCreatingAccount(true);
     try {
       // The file's own balance (when present) is the source of truth and
@@ -427,7 +468,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       const account = await addBankAccount(
         newAccountName.trim(),
         newAccountKind,
-        detectedCode ? { code: detectedCode, name: detectedName ?? newAccountName, fullName: detectedName ?? newAccountName, ispb: "" } : undefined,
+        selectedInstitution ?? undefined,
         !hasOfxBalance && newAccountBalanceTouched ? newAccountBalance : undefined,
         !hasOfxBalance && newAccountBalanceTouched ? newAccountAsOf : undefined,
         { externalBankAccountId: lastOfx.accountId, externalBranchId: lastOfx.branchId }
@@ -453,15 +494,20 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   }
 
   async function handleCreateCardForOfx() {
-    if (!lastOfx || !newCardName.trim() || newCardLastFour.length !== 4) return;
+    if (!lastOfx || !newCardName.trim() || newCardLastFour.length !== 4 || !selectedInstitution) return;
     setCreatingCard(true);
     try {
       const card = await addCard({
         name: newCardName.trim(),
-        institution: detectedName ?? newCardName.trim(),
-        institutionCode: detectedCode,
+        institution: selectedInstitution?.name ?? detectedName ?? newCardName.trim(),
+        institutionCode: selectedInstitution?.code ?? detectedCode,
+        institutionIspb: selectedInstitution?.ispb,
+        institutionLogoUrl: selectedInstitution?.logoUrl,
         type: "credito",
         lastFourDigits: newCardLastFour,
+        limit: lastOfx.creditLimit,
+        availableCredit: lastOfx.availableCredit,
+        availableCreditAsOfDateTime: lastOfx.balance?.asOfDateTime,
         color: "#0a6847",
         externalCardAccountId: lastOfx.accountId,
       });
@@ -480,7 +526,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     await commitCsvPreview(csvHeaders, csvRows, mapping);
 
     await importService.saveMapping(userId, {
-      fileType: "csv",
+      fileType: fileFormat === "xls" || fileFormat === "xlsx" || fileFormat === "txt" ? fileFormat : "csv",
       columnSignature: detectCsvColumnSignature(csvHeaders),
       dateColumn: mapping.dateColumn,
       descriptionColumn: mapping.descriptionColumn,
@@ -488,6 +534,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       creditColumn: mapping.creditColumn,
       debitColumn: mapping.debitColumn,
       externalIdColumn: mapping.externalIdColumn,
+      installmentNumberColumn: mapping.installmentNumberColumn,
+      installmentCountColumn: mapping.installmentCountColumn,
       dateFormat: "dd/MM/yyyy",
       decimalFormat: "comma",
     }).catch(() => undefined);
@@ -513,24 +561,50 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     if (!preview) return;
     const selectedRows = rows.filter((r) => r.selected);
     if (selectedRows.length === 0) {
+      if (rows.length > 0 && rows.every((row) => row.status === "duplicate")) {
+        show("Arquivo já importado: nenhum lançamento ou saldo duplicado foi criado.");
+        finishOneFile();
+        return;
+      }
       show("Selecione ao menos um lançamento para importar.", "error");
       return;
     }
     setLoadingLabel("Importando...");
     try {
       const batch = await importService.commit(userId, target, preview, selectedRows);
+      if (effectiveMode === "card" && target.cardId && lastOfx && (lastOfx.creditLimit !== undefined || lastOfx.availableCredit !== undefined)) {
+        await cardService.update(userId, target.cardId, {
+          ...(lastOfx.creditLimit !== undefined ? { limit: lastOfx.creditLimit } : {}),
+          ...(lastOfx.availableCredit !== undefined
+            ? { availableCredit: lastOfx.availableCredit, availableCreditAsOfDateTime: lastOfx.balance?.asOfDateTime }
+            : {}),
+        });
+      }
       await reloadAll();
       show(`Importação concluída: ${batch.importedRecords} lançamento(s) importado(s).`);
 
-      if (mode === "account" && lastOfx?.balance && target.accountId) {
+      if (effectiveMode === "account" && lastOfx?.balance && target.accountId) {
         const asOfDate = lastOfx.balance.asOf ?? preview.periodEnd ?? todayISO();
-        const result = await reconcileAccountBalance(target.accountId, lastOfx.balance.amount, asOfDate, "ofx", batch.id);
+        const result = await reconcileAccountBalance(target.accountId, lastOfx.balance.amount, asOfDate, "ofx", batch.id, {
+          availableBalance: lastOfx.availableBalance?.amount,
+          asOfDateTime: lastOfx.balance.asOfDateTime,
+          institutionCode: detectedCode,
+          externalBankAccountId: lastOfx.accountId,
+        });
         setCommittedBatchId(batch.id);
         setReconciliation(result);
         setCorrectedBalance(result.reported);
         setStep("reconciliation");
-      } else if (mode === "card" && lastOfx?.balance && target.cardId) {
-        const result = await recordCardStatement(target.cardId, Math.abs(lastOfx.balance.amount));
+      } else if (effectiveMode === "card" && lastOfx?.balance && target.cardId) {
+        const asOfDate = lastOfx.balance.asOf ?? preview.periodEnd ?? todayISO();
+        const result = await recordCardStatement(target.cardId, Math.abs(lastOfx.balance.amount), {
+          rawStatementBalance: lastOfx.balance.amount,
+          asOfDate,
+          asOfDateTime: lastOfx.balance.asOfDateTime,
+          periodStart: preview.periodStart,
+          periodEnd: preview.periodEnd,
+          importBatchId: batch.id,
+        });
         if (result && Math.abs(result.difference) >= 0.01) {
           setCardStatement(result);
           setStep("card-statement");
@@ -556,7 +630,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   }
 
   async function handleCreateAdjustment() {
-    if (!target.accountId || !reconciliation) return;
+    if (!target.accountId || !reconciliation || reconciliation.difference === undefined) return;
     const asOfDate = lastOfx?.balance?.asOf ?? preview?.periodEnd ?? todayISO();
     await createBalanceAdjustment(target.accountId, reconciliation.difference, asOfDate, "Ajuste criado a partir da conferência de importação.");
     if (committedBatchId) {
@@ -580,7 +654,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       <div className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-surface shadow-2xl md:max-h-[85dvh] md:w-full md:max-w-3xl md:rounded-2xl">
         <div className="flex items-center justify-between border-b border-ink-100 px-5 py-4">
           <div>
-            <h2 className="text-lg font-bold text-ink-900">Importar {mode === "card" ? "fatura do cartão" : "extrato"}</h2>
+            <h2 className="text-lg font-bold text-ink-900">Importar {effectiveMode === "card" ? "fatura do cartão" : "extrato"}</h2>
             {queueTotal > 1 && (
               <p className="text-xs text-ink-400">
                 Arquivo {queueTotal - fileQueue.length} de {queueTotal}
@@ -597,13 +671,13 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
           {step === "select" && (
             <div className="space-y-4">
-              {mode === "card" && !fixedCardId && (
+              {effectiveMode === "card" && !fixedCardId && (
                 <p className="text-sm text-ink-500">
                   Selecione o arquivo primeiro — para OFX, identificamos o cartão automaticamente. Para CSV, pediremos o cartão em seguida.
                 </p>
               )}
 
-              {mode === "account" && !fixedAccountId && (
+              {effectiveMode === "account" && !fixedAccountId && (
                 <p className="text-sm text-ink-500">
                   Selecione o arquivo primeiro — para OFX, identificamos o banco e a conta automaticamente. Para CSV, pediremos a conta em seguida.
                 </p>
@@ -611,14 +685,14 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
               <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 px-6 py-12 text-center hover:border-brand-400 hover:bg-brand-50/40">
                 <Upload size={28} className="text-brand-600" />
-                <span className="text-sm font-semibold text-ink-900">Selecione um ou mais arquivos OFX, CSV ou QIF</span>
+                <span className="text-sm font-semibold text-ink-900">Selecione arquivos OFX, CSV, XLS, XLSX, QIF ou TXT</span>
                 <span className="text-xs text-ink-400">
                   Seus arquivos são processados localmente, no seu dispositivo. Selecionando vários, cada um passa pela
                   revisão em sequência.
                 </span>
                 <input
                   type="file"
-                  accept=".ofx,.csv,.qif,text/csv,application/x-ofx"
+                  accept=".ofx,.csv,.xls,.xlsx,.qif,.txt,text/csv,text/plain,application/x-ofx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   multiple
                   className="hidden"
                   onChange={(e) => {
@@ -695,21 +769,23 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
           {step === "product-uncertain" && (
             <div className="space-y-4">
               <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-sm text-warning-700">
-                Este arquivo parece ser {lastOfx?.isCreditCard ? "uma fatura de cartão" : "um extrato de conta"}, mas você está
-                importando pela tela de {mode === "card" ? "Cartões" : "Transações"}. Deseja continuar mesmo assim?
+                {lastOfx?.financialProduct === "unknown"
+                  ? "O arquivo não informa com segurança se representa uma conta ou um cartão."
+                  : `O arquivo parece ser ${lastOfx?.financialProduct === "credit_card" ? "uma fatura de cartão" : "um extrato de conta"}.`} Escolha o destino financeiro antes de continuar.
               </p>
-              <div className="flex gap-2">
-                <button onClick={() => setStep("select")} className="flex-1 rounded-lg border border-ink-100 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
-                  Cancelar
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button onClick={() => chooseProduct("account")} className="flex items-center justify-center gap-2 rounded-lg border border-ink-100 py-2.5 text-sm font-semibold text-ink-700 hover:bg-ink-50">
+                  <Landmark size={16} /> Extrato de conta
                 </button>
-                <button onClick={confirmProductAnyway} className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-                  Continuar mesmo assim
+                <button onClick={() => chooseProduct("card")} className="flex items-center justify-center gap-2 rounded-lg border border-ink-100 py-2.5 text-sm font-semibold text-ink-700 hover:bg-ink-50">
+                  <CreditCardIcon size={16} /> Fatura de cartão
                 </button>
               </div>
+              <button onClick={() => setStep("select")} className="w-full rounded-lg px-3 py-2 text-sm font-medium text-ink-400 hover:bg-ink-50">Escolher outro arquivo</button>
             </div>
           )}
 
-          {step === "match" && mode === "account" && (
+          {step === "match" && effectiveMode === "account" && (
             <div className="space-y-4">
               {detectedLabel && (
                 <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">Banco detectado: {detectedLabel}</p>
@@ -750,6 +826,20 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   <p className="mt-3 text-sm text-ink-600">Esta conta ainda não está cadastrada. Cadastrar esta conta no EM DIA?</p>
 
                   <div className="mt-3 space-y-3 rounded-lg bg-ink-50 p-3">
+                    {!selectedInstitution && (
+                      <FormField label="Instituição financeira">
+                        <BankSelect
+                          value={selectedInstitution}
+                          onSelect={(institution) => {
+                            setSelectedInstitution(institution);
+                            setDetectedCode(institution.code);
+                            setDetectedName(institution.name);
+                            if (!newAccountName.trim()) setNewAccountName(institution.name);
+                          }}
+                          placeholder="Banco não identificado — selecione"
+                        />
+                      </FormField>
+                    )}
                     <FormField label="Nome da conta">
                       <input className={inputClass} value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} />
                     </FormField>
@@ -796,7 +886,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={handleCreateAccountForOfx}
-                      disabled={creatingAccount || !newAccountName.trim()}
+                      disabled={creatingAccount || !newAccountName.trim() || !selectedInstitution}
                       className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
                     >
                       Cadastrar conta
@@ -860,7 +950,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
             </div>
           )}
 
-          {step === "match" && mode === "card" && (
+          {step === "match" && effectiveMode === "card" && (
             <div className="space-y-4">
               {detectedLabel && (
                 <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">Banco detectado: {detectedLabel}</p>
@@ -899,6 +989,20 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   <p className="mt-3 text-sm text-ink-600">Cadastrar este cartão no EM DIA?</p>
 
                   <div className="mt-3 space-y-3 rounded-lg bg-ink-50 p-3">
+                    {!selectedInstitution && (
+                      <FormField label="Instituição financeira">
+                        <BankSelect
+                          value={selectedInstitution}
+                          onSelect={(institution) => {
+                            setSelectedInstitution(institution);
+                            setDetectedCode(institution.code);
+                            setDetectedName(institution.name);
+                            if (!newCardName.trim()) setNewCardName(institution.name);
+                          }}
+                          placeholder="Banco não identificado — selecione"
+                        />
+                      </FormField>
+                    )}
                     <FormField label="Nome do cartão">
                       <input className={inputClass} value={newCardName} onChange={(e) => setNewCardName(e.target.value)} />
                     </FormField>
@@ -920,7 +1024,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={handleCreateCardForOfx}
-                      disabled={creatingCard || !newCardName.trim() || newCardLastFour.length !== 4}
+                      disabled={creatingCard || !newCardName.trim() || newCardLastFour.length !== 4 || !selectedInstitution}
                       className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
                     >
                       Cadastrar cartão
@@ -1029,6 +1133,20 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
                 </select>
               </FormField>
+              <div className="grid grid-cols-2 gap-3">
+                <FormField label="Nº da parcela (opcional)" htmlFor="map-installment-number">
+                  <select id="map-installment-number" className={inputClass} value={mapping.installmentNumberColumn ?? ""} onChange={(e) => setMapping((m) => ({ ...m, installmentNumberColumn: e.target.value || undefined }))}>
+                    <option value="">—</option>
+                    {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </FormField>
+                <FormField label="Total de parcelas (opcional)" htmlFor="map-installment-count">
+                  <select id="map-installment-count" className={inputClass} value={mapping.installmentCountColumn ?? ""} onChange={(e) => setMapping((m) => ({ ...m, installmentCountColumn: e.target.value || undefined }))}>
+                    <option value="">—</option>
+                    {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </FormField>
+              </div>
               <button onClick={confirmMapping} className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700">
                 Continuar
               </button>
@@ -1099,7 +1217,8 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                           )}
 
                           {row.suggestion && (
-                            <label className="mt-2 flex items-start gap-2 rounded-lg bg-warning-500/10 px-2.5 py-1.5 text-xs text-warning-700">
+                            <div className="mt-2 rounded-lg bg-warning-500/10 px-2.5 py-1.5 text-xs text-warning-700">
+                            <label className="flex items-start gap-2">
                               <input
                                 type="checkbox"
                                 className="mt-0.5"
@@ -1115,6 +1234,17 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                                 )}
                               </span>
                             </label>
+                            {row.suggestion.kind === "installment_new" && (row.suggestion.installmentStartNumber ?? 1) > 1 && (
+                              <select
+                                className="mt-2 w-full rounded-md border border-warning-500/20 bg-surface px-2 py-1 text-xs text-ink-700"
+                                value={row.suggestion.priorInstallmentsTreatment ?? "historical"}
+                                onChange={(e) => updateRow(row.key, { suggestion: { ...row.suggestion!, priorInstallmentsTreatment: e.target.value as "historical" | "paid" } })}
+                              >
+                                <option value="historical">Parcelas anteriores: histórico sem movimentação</option>
+                                <option value="paid">Parcelas anteriores: marcar como pagas</option>
+                              </select>
+                            )}
+                            </div>
                           )}
 
                           {!disabled && !row.suggestion && (
@@ -1151,10 +1281,10 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
               ) : (
                 <div className="space-y-3 rounded-lg bg-warning-500/10 px-4 py-3 text-sm text-warning-700">
                   <p className="flex items-center gap-2 font-semibold">
-                    <AlertTriangle size={18} /> Encontramos uma diferença de {formatCurrency(Math.abs(reconciliation.difference))}.
+                    <AlertTriangle size={18} /> Encontramos uma diferença de {formatCurrency(Math.abs(reconciliation.difference ?? 0))}.
                   </p>
                   <p className="text-xs">
-                    Saldo informado pelo banco: {formatCurrency(reconciliation.reported)} · Saldo calculado pelo EM DIA: {formatCurrency(reconciliation.calculated)}
+                    Saldo informado pelo banco: {formatCurrency(reconciliation.reported)} · Saldo calculado pelo EM DIA: {reconciliation.calculated === undefined ? "não disponível" : formatCurrency(reconciliation.calculated)}
                   </p>
                 </div>
               )}

@@ -13,6 +13,7 @@ export interface BankAccountInput {
   institution?: FinancialInstitution;
   externalBankAccountId?: string;
   externalBranchId?: string;
+  currency?: string;
 }
 
 export const bankAccountService = {
@@ -30,7 +31,8 @@ export const bankAccountService = {
       userId,
       name: input.name,
       kind: input.kind,
-      initialBalance: input.initialBalance ?? 0,
+      initialBalance: input.initialBalance,
+      currency: input.currency,
       institutionCode: input.institution?.code,
       institutionName: input.institution?.name,
       institutionFullName: input.institution?.fullName,

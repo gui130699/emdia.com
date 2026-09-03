@@ -59,7 +59,7 @@ export default function AccountForm({ formId, initial, onSubmit }: AccountFormPr
           amount: 0,
           dueDate: todayISO(),
           categoryId: "",
-          accountId: bankAccounts[0]?.id ?? "",
+          accountId: "",
           paymentMethod: "boleto",
           notes: "",
           recurring: false,
@@ -106,6 +106,7 @@ export default function AccountForm({ formId, initial, onSubmit }: AccountFormPr
         </FormField>
         <FormField label="Conta bancária" htmlFor="accountId">
           <select id="accountId" className={inputClass} {...register("accountId")}>
+            <option value="">Nenhuma conta selecionada</option>
             {bankAccounts.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}

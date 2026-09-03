@@ -7,9 +7,13 @@ const store = createRepository<BalanceSnapshot>("balanceSnapshots");
 export interface CreateSnapshotInput {
   accountId: string;
   balance: number;
+  availableBalance?: number;
   asOfDate: string;
+  asOfDateTime?: string;
   source: BalanceSnapshotSource;
   importBatchId?: string;
+  institutionCode?: string;
+  externalBankAccountId?: string;
 }
 
 export const balanceSnapshotService = {
@@ -27,15 +31,29 @@ export const balanceSnapshotService = {
     return forAccount[forAccount.length - 1];
   },
 
-  /** Idempotent per (accountId, asOfDate, source, importBatchId) — importing
-   * the same statement twice must never create a duplicate snapshot. */
+  /** Idempotent by the financial position itself, not by importBatchId.
+   * Reimporting the same statement produces a new batch id, but must not
+   * create a second balance position. A corrected source file for the same
+   * instant updates the existing position and its updatedAt timestamp. */
   async create(userId: string, input: CreateSnapshotInput): Promise<BalanceSnapshot> {
     const existing = await this.listForAccount(userId, input.accountId);
     const duplicate = existing.find(
-      (s) => s.asOfDate === input.asOfDate && s.source === input.source && s.importBatchId === input.importBatchId
+      (s) =>
+        s.asOfDate === input.asOfDate &&
+        (s.asOfDateTime ?? "") === (input.asOfDateTime ?? "") &&
+        s.source === input.source &&
+        (s.externalBankAccountId ?? "") === (input.externalBankAccountId ?? "")
     );
     if (duplicate) {
-      return store.update(userId, duplicate.id, { balance: input.balance, updatedAt: new Date().toISOString() }) as Promise<BalanceSnapshot>;
+      return store.update(userId, duplicate.id, {
+        balance: input.balance,
+        availableBalance: input.availableBalance,
+        importBatchId: duplicate.importBatchId ?? input.importBatchId,
+        institutionCode: input.institutionCode ?? duplicate.institutionCode,
+        externalBankAccountId: input.externalBankAccountId ?? duplicate.externalBankAccountId,
+        reviewStatus: "confirmed",
+        updatedAt: new Date().toISOString(),
+      }) as Promise<BalanceSnapshot>;
     }
     const now = new Date().toISOString();
     const snapshot: BalanceSnapshot = {
@@ -43,9 +61,14 @@ export const balanceSnapshotService = {
       userId,
       accountId: input.accountId,
       balance: input.balance,
+      availableBalance: input.availableBalance,
       asOfDate: input.asOfDate,
+      asOfDateTime: input.asOfDateTime,
       source: input.source,
       importBatchId: input.importBatchId,
+      institutionCode: input.institutionCode,
+      externalBankAccountId: input.externalBankAccountId,
+      reviewStatus: "confirmed",
       createdAt: now,
       updatedAt: now,
     };

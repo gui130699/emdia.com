@@ -71,13 +71,18 @@ export default function Transactions() {
       else entry.expense += t.amount;
       byDate.set(t.date, entry);
     }
-    let running = 0;
     return Array.from(byDate.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, v]) => {
-        running += v.income - v.expense;
-        return { label: formatDateShort(date), income: v.income, expense: v.expense, balance: running };
-      });
+      .reduce<Array<{ label: string; income: number; expense: number; balance: number }>>((result, [date, value]) => {
+        const priorBalance = result.at(-1)?.balance ?? 0;
+        result.push({
+          label: formatDateShort(date),
+          income: value.income,
+          expense: value.expense,
+          balance: priorBalance + value.income - value.expense,
+        });
+        return result;
+      }, []);
   }, [filtered]);
 
   function openNew() {

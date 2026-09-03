@@ -70,6 +70,7 @@ export default function ProfileCard() {
       await withTimeout(uploadBytes(photoRef, file), 15000);
       const url = await getDownloadURL(photoRef);
       await updateProfile(auth.currentUser, { photoURL: url });
+      await userProfileService.update(auth.currentUser.uid, { photoURL: url });
       setPhotoURL(url);
       show("Foto atualizada com sucesso.");
     } catch (err) {

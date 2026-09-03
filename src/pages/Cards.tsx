@@ -47,6 +47,9 @@ export default function Cards() {
     return creditCards.map((card) => {
       const period = getCurrentInvoicePeriod(card);
       if (!period) {
+        const record = invoices
+          .filter((invoice) => invoice.cardId === card.id)
+          .sort((left, right) => right.periodKey.localeCompare(left.periodKey))[0];
         // Closing/due day not informed yet (typically a card created from a
         // statement import) — there's no cycle to compute a "fatura atual"
         // from, so say so instead of pretending a R$0 invoice.
@@ -54,12 +57,14 @@ export default function Cards() {
           card,
           period: undefined,
           purchases: [],
-          total: 0,
-          paid: false,
-          partial: false,
-          paidAmount: undefined,
-          remainingAmount: undefined,
-          invoiceId: undefined,
+          total: record?.total ?? 0,
+          paid: record?.status === "paid",
+          partial: record?.status === "partial",
+          paidAmount: record?.paidAmount,
+          remainingAmount: record?.remainingAmount,
+          invoiceId: record?.id,
+          statementBalance: record?.statementBalance,
+          statementRecord: record,
           needsSetup: true,
         };
       }
@@ -79,6 +84,7 @@ export default function Cards() {
         remainingAmount: record?.remainingAmount,
         invoiceId: record?.id,
         statementBalance: record?.statementBalance,
+        statementRecord: record,
         needsSetup: false,
       };
     });
@@ -99,9 +105,12 @@ export default function Cards() {
     [transactions]
   );
 
-  const categoryData = activeInvoice
-    ? cardConsumptionBreakdown(activeInvoice.purchases, categories, activeInvoice.card.id)
-    : [];
+  const categoryData = useMemo(
+    () => activeInvoice
+      ? cardConsumptionBreakdown(activeInvoice.purchases, categories, activeInvoice.card.id)
+      : [],
+    [activeInvoice, categories]
+  );
   const consumptionTotal = useMemo(() => categoryData.reduce((sum, item) => sum + item.value, 0), [categoryData]);
   const statementSummary = activeInvoice ? cardStatementSummary(activeInvoice.purchases) : null;
 
@@ -192,7 +201,9 @@ export default function Cards() {
             icon={Receipt}
             iconClassName="bg-danger-500/10 text-danger-600"
             label="Fatura atual"
-            value={activeInvoice?.needsSetup ? "Não calculada" : activeInvoice ? formatCurrency(activeInvoice.total) : formatCurrency(0)}
+            value={activeInvoice?.needsSetup
+              ? activeInvoice.statementBalance != null ? formatCurrency(activeInvoice.statementBalance) : "Não calculada"
+              : activeInvoice ? formatCurrency(activeInvoice.total) : formatCurrency(0)}
           />
           <SummaryCard
             icon={Calendar}
@@ -231,6 +242,22 @@ export default function Cards() {
                   Este cartão ainda não tem dia de fechamento e vencimento definidos, então não é possível calcular a
                   fatura atual.
                 </p>
+                {activeInvoice.statementRecord && (
+                  <div className="mt-4 rounded-xl bg-ink-50 p-3 text-sm">
+                    <p className="font-semibold text-ink-900">
+                      Última posição importada: {formatCurrency(activeInvoice.statementRecord.statementBalance ?? activeInvoice.statementRecord.total)}
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-ink-500">
+                      <span>Compras</span><span className="text-right">{formatCurrency(activeInvoice.statementRecord.purchaseTotal ?? 0)}</span>
+                      <span>Parcelas</span><span className="text-right">{formatCurrency(activeInvoice.statementRecord.installmentTotal ?? 0)}</span>
+                      <span>Encargos/saldo anterior</span><span className="text-right">{formatCurrency((activeInvoice.statementRecord.chargesTotal ?? 0) + (activeInvoice.statementRecord.previousBalance ?? 0))}</span>
+                      <span>Pagamentos/créditos</span><span className="text-right">-{formatCurrency((activeInvoice.statementRecord.paymentsTotal ?? 0) + (activeInvoice.statementRecord.creditsTotal ?? 0))}</span>
+                    </div>
+                  </div>
+                )}
+                {activeInvoice.card.availableCredit != null && (
+                  <p className="mt-3 text-xs text-ink-500">Crédito disponível informado pelo banco: {formatCurrency(activeInvoice.card.availableCredit)}</p>
+                )}
                 <button
                   onClick={() => {
                     setEditingCard(activeInvoice.card);
@@ -256,6 +283,9 @@ export default function Cards() {
                       Posição informada pelo banco: {formatCurrency(activeInvoice.statementBalance)} — pode haver uma
                       linha do extrato não importada.
                     </p>
+                  )}
+                  {activeInvoice.card.availableCredit != null && (
+                    <p className="mt-1 text-xs text-ink-500">Crédito disponível informado pelo banco: {formatCurrency(activeInvoice.card.availableCredit)}</p>
                   )}
                   <div className="mt-4">
                     <div className="mb-1 flex justify-between text-xs text-ink-500">

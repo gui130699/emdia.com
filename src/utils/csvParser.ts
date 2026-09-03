@@ -1,5 +1,5 @@
 export interface ParsedCsv {
-  delimiter: "," | ";";
+  delimiter: "," | ";" | "\t";
   headers: string[];
   rows: string[][];
 }
@@ -37,9 +37,11 @@ function splitLine(line: string, delimiter: string): string[] {
   return fields.map((f) => f.trim());
 }
 
-function detectDelimiter(headerLine: string): "," | ";" {
+function detectDelimiter(headerLine: string): "," | ";" | "\t" {
   const semicolons = (headerLine.match(/;/g) ?? []).length;
   const commas = (headerLine.match(/,/g) ?? []).length;
+  const tabs = (headerLine.match(/\t/g) ?? []).length;
+  if (tabs > semicolons && tabs > commas) return "\t";
   return semicolons >= commas ? ";" : ",";
 }
 
