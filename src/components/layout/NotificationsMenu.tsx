@@ -5,7 +5,11 @@ import { useFinanceData } from "../../stores/FinanceDataContext";
 import { formatCurrency } from "../../utils/currency";
 import { daysUntil } from "../../utils/date";
 
-export default function NotificationsMenu() {
+interface NotificationsMenuProps {
+  variant?: "light" | "dark";
+}
+
+export default function NotificationsMenu({ variant = "light" }: NotificationsMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useClickOutside(ref, () => setOpen(false));
@@ -22,7 +26,9 @@ export default function NotificationsMenu() {
         type="button"
         aria-label="Notificações"
         onClick={() => setOpen((v) => !v)}
-        className="relative flex h-10 w-10 items-center justify-center rounded-full text-ink-500 hover:bg-ink-50"
+        className={`relative flex items-center justify-center rounded-full ${
+          variant === "dark" ? "h-11 w-11 text-white hover:bg-white/10" : "h-10 w-10 text-ink-500 hover:bg-ink-50"
+        }`}
       >
         <Bell size={19} />
         {relevant.length > 0 && (

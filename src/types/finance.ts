@@ -5,6 +5,11 @@ export interface BankAccount {
   userId: string;
   name: string;
   kind: BankAccountKind;
+  institutionCode?: string;
+  institutionName?: string;
+  institutionFullName?: string;
+  institutionIspb?: string;
+  institutionLogoUrl?: string;
   createdAt: string;
 }
 
@@ -70,6 +75,9 @@ export interface CreditCard {
   userId: string;
   name: string;
   institution: string;
+  institutionCode?: string;
+  institutionIspb?: string;
+  institutionLogoUrl?: string;
   type: CardType;
   lastFourDigits: string;
   limit: number;

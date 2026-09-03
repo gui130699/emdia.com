@@ -92,7 +92,7 @@ export default function Goals() {
       />
 
       <div className="space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           <SummaryCard icon={PiggyBank} label="Total guardado" value={formatCurrency(totalSaved)} />
           <SummaryCard icon={Flag} iconClassName="bg-info-500/10 text-info-600" label="Meta do mês" value={formatCurrency(suggestion)} hint="Contribuição total planejada" />
           <SummaryCard icon={Target} label="Objetivos ativos" value={String(activeGoals)} />
@@ -129,7 +129,7 @@ export default function Goals() {
                       contentStyle={{
                         borderRadius: 12,
                         borderColor: "var(--color-ink-100)",
-                        backgroundColor: "var(--color-white)",
+                        backgroundColor: "var(--color-surface)",
                         color: "var(--color-ink-900)",
                         fontSize: 13,
                       }}

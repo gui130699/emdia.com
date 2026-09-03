@@ -6,6 +6,9 @@ const store = createLocalCollection<CreditCard>("cards");
 export interface CreditCardInput {
   name: string;
   institution: string;
+  institutionCode?: string;
+  institutionIspb?: string;
+  institutionLogoUrl?: string;
   type: CreditCard["type"];
   lastFourDigits: string;
   limit: number;

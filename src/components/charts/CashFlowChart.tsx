@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import { formatCurrency } from "../../utils/currency";
 import { formatAxisCurrency } from "../../utils/chartFormat";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 export interface CashFlowPoint {
   label: string;
@@ -19,11 +20,19 @@ export interface CashFlowPoint {
 }
 
 export default function CashFlowChart({ data }: { data: CashFlowPoint[] }) {
+  const isMobile = useIsMobile();
+
   return (
-    <ResponsiveContainer width="100%" height={280}>
+    <ResponsiveContainer width="100%" height={isMobile ? 240 : 280}>
       <ComposedChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-ink-100)" />
-        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--color-ink-400)" }} axisLine={false} tickLine={false} />
+        <XAxis
+          dataKey="label"
+          tick={{ fontSize: 12, fill: "var(--color-ink-400)" }}
+          axisLine={false}
+          tickLine={false}
+          interval={isMobile ? "preserveStartEnd" : 0}
+        />
         <YAxis
           tickFormatter={formatAxisCurrency}
           tick={{ fontSize: 11, fill: "var(--color-ink-400)" }}
@@ -36,7 +45,7 @@ export default function CashFlowChart({ data }: { data: CashFlowPoint[] }) {
           contentStyle={{
             borderRadius: 12,
             borderColor: "var(--color-ink-100)",
-            backgroundColor: "var(--color-white)",
+            backgroundColor: "var(--color-surface)",
             color: "var(--color-ink-900)",
             fontSize: 13,
           }}

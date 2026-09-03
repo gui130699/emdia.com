@@ -97,3 +97,12 @@
 [data-density="compact"] .space-y-4 > * + * {
   margin-top: 0.65rem;
 }
+
+/* Hidden-but-functional horizontal scroll, for chip rows and card carousels. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

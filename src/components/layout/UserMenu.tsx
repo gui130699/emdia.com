@@ -7,7 +7,11 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useClickOutside } from "../../hooks/useClickOutside";
 import Avatar from "./Avatar";
 
-export default function UserMenu() {
+interface UserMenuProps {
+  variant?: "light" | "dark";
+}
+
+export default function UserMenu({ variant = "light" }: UserMenuProps) {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -21,12 +25,14 @@ export default function UserMenu() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 hover:bg-ink-50"
+        className={`flex items-center gap-2 rounded-full py-1 pl-1 pr-2 ${
+          variant === "dark" ? "hover:bg-white/10" : "hover:bg-ink-50"
+        }`}
         aria-haspopup="true"
         aria-expanded={open}
       >
-        <Avatar name={name} />
-        <ChevronDown size={16} className="text-ink-400" />
+        <Avatar name={name} size={variant === "dark" ? 34 : 36} />
+        <ChevronDown size={16} className={variant === "dark" ? "text-white/70" : "text-ink-400"} />
       </button>
 
       {open && (

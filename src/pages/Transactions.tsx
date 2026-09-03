@@ -16,6 +16,7 @@ import { filterByPeriod, sumByType } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
 import { formatDateShort, toDateInputValue } from "../utils/date";
 import { PAYMENT_METHOD_LABELS } from "../constants/labels";
+import { inputClass } from "../components/ui/formStyles";
 import { exportToCsv, exportToPdf } from "../utils/exportData";
 import type { Transaction } from "../types/finance";
 
@@ -155,7 +156,56 @@ export default function Transactions() {
       />
 
       <div className="space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-ink-100 bg-surface p-4">
+        {/* Mobile filter bar: search + chips + compact date range. Desktop block below is unchanged. */}
+        <div className="space-y-3 md:hidden">
+          <SearchInput value={search} onChange={setSearch} placeholder="Buscar transação..." />
+
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
+            {[
+              { key: "all", label: "Todas" },
+              { key: "income", label: "Receitas" },
+              { key: "expense", label: "Despesas" },
+              ...categories.map((c) => ({ key: c.id, label: c.name })),
+            ].map((chip) => {
+              const isTypeChip = chip.key === "all" || chip.key === "income" || chip.key === "expense";
+              const active = isTypeChip
+                ? typeFilter === chip.key && !categoryFilter
+                : categoryFilter === chip.key;
+              return (
+                <button
+                  key={chip.key}
+                  onClick={() => {
+                    if (isTypeChip) {
+                      setTypeFilter(chip.key as TypeFilter);
+                      setCategoryFilter("");
+                    } else {
+                      setCategoryFilter(chip.key);
+                      setTypeFilter("all");
+                    }
+                  }}
+                  className={`min-h-9 shrink-0 rounded-full border px-3.5 text-sm font-medium ${
+                    active ? "border-brand-600 bg-brand-50 text-brand-700" : "border-ink-100 bg-surface text-ink-600"
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-ink-500">De</span>
+              <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className={inputClass} />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-ink-500">Até</span>
+              <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className={inputClass} />
+            </label>
+          </div>
+        </div>
+
+        <div className="hidden flex-wrap items-end gap-3 rounded-2xl border border-ink-100 bg-surface p-4 md:flex">
           <label className="text-sm">
             <span className="mb-1 block text-xs font-medium text-ink-500">De</span>
             <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="rounded-lg border border-ink-100 px-2.5 py-1.5 text-sm" />
@@ -192,10 +242,15 @@ export default function Transactions() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           <SummaryCard icon={ArrowUpCircle} iconClassName="bg-brand-50 text-brand-600" label="Entradas" value={formatCurrency(totals.income)} />
           <SummaryCard icon={ArrowDownCircle} iconClassName="bg-danger-500/10 text-danger-600" label="Saídas" value={formatCurrency(totals.expense)} />
-          <SummaryCard icon={Wallet2} label="Saldo do período" value={formatCurrency(totals.balance)} />
+          <SummaryCard
+            icon={Wallet2}
+            label="Saldo do período"
+            value={formatCurrency(totals.balance)}
+            className="col-span-2 sm:col-span-1"
+          />
         </div>
 
         <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">

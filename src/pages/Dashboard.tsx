@@ -18,6 +18,7 @@ import EmptyState from "../components/ui/EmptyState";
 import ProgressBar from "../components/ui/ProgressBar";
 import IncomeExpenseChart from "../components/charts/IncomeExpenseChart";
 import CategoryChart from "../components/charts/CategoryChart";
+import MiniSparkline from "../components/charts/MiniSparkline";
 import TransactionDrawer from "../components/transactions/TransactionDrawer";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
@@ -83,6 +84,10 @@ export default function Dashboard() {
     .reduce((sum, b) => sum + b.amount, 0);
 
   const evolutionData = useMemo(() => monthlyEvolution(transactions, monthsBack), [transactions, monthsBack]);
+  const balanceSparkline = useMemo(
+    () => monthlyEvolution(transactions, 6).map((p) => p.income - p.expense),
+    [transactions]
+  );
   const expenseBreakdown = useMemo(
     () => categoryBreakdown(thisMonthTx, categories, "expense"),
     [thisMonthTx, categories]
@@ -138,7 +143,52 @@ export default function Dashboard() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* Mobile summary layout: hero balance card + compact secondary stats. Desktop block below is unchanged. */}
+        <div className="space-y-3 md:hidden">
+          <div className="rounded-2xl bg-linear-to-br from-petrol-800 to-brand-900 p-5 text-white">
+            <div className="flex items-center gap-1.5 text-sm text-white/70">
+              <Wallet size={16} /> Saldo total
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-2xl font-bold">{formatCurrency(totalBalance)}</span>
+              {balanceSparkline.length > 1 && <MiniSparkline data={balanceSparkline} />}
+            </div>
+            {lastMonthTotals.income > 0 && (
+              <span
+                className={`mt-3 inline-flex items-center rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold ${
+                  incomeGrowth >= 0 ? "text-brand-200" : "text-red-200"
+                }`}
+              >
+                {formatPercent(incomeGrowth)} em relação ao mês anterior
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <SummaryCard
+              icon={TrendingUp}
+              iconClassName="bg-brand-50 text-brand-600"
+              label="Receitas do mês"
+              value={formatCurrency(thisMonthTotals.income)}
+            />
+            <SummaryCard
+              icon={TrendingDown}
+              iconClassName="bg-danger-500/10 text-danger-600"
+              label="Despesas do mês"
+              value={formatCurrency(thisMonthTotals.expense)}
+            />
+          </div>
+
+          <SummaryCard
+            icon={CalendarClock}
+            iconClassName="bg-warning-500/10 text-warning-600"
+            label="Contas a vencer"
+            value={formatCurrency(upcomingTotal)}
+            hint={`${upcomingBills.filter((b) => daysUntil(b.dueDate) <= 7).length} conta(s) nos próximos 7 dias`}
+          />
+        </div>
+
+        <div className="hidden gap-4 md:grid md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard icon={Wallet} label="Saldo total" value={formatCurrency(totalBalance)} />
           <SummaryCard
             icon={TrendingUp}

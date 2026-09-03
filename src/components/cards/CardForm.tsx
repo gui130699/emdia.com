@@ -4,15 +4,20 @@ import { z } from "zod";
 import { useFinanceData } from "../../stores/FinanceDataContext";
 import FormField from "../ui/FormField";
 import CurrencyInput from "../ui/CurrencyInput";
+import BankSelect from "../institutions/BankSelect";
 import { inputClass } from "../ui/formStyles";
 import type { CreditCard } from "../../types/finance";
 import type { CreditCardInput } from "../../services/cardService";
+import type { FinancialInstitution } from "../../types/institution";
 
 const COLORS = ["#0a6847", "#0f6466", "#1e3a8a", "#7c3aed", "#111827", "#b91c1c"];
 
 const schema = z.object({
   name: z.string().min(1, "Informe um nome"),
-  institution: z.string().min(1, "Informe a instituição"),
+  institution: z.string().min(1, "Selecione a instituição"),
+  institutionCode: z.string().optional(),
+  institutionIspb: z.string().optional(),
+  institutionLogoUrl: z.string().optional(),
   type: z.enum(["credito", "debito"]),
   lastFourDigits: z.string().regex(/^\d{4}$/, "Informe os últimos 4 números"),
   limit: z.number().nonnegative(),
@@ -38,12 +43,16 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
     handleSubmit,
     control,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: initial ?? {
       name: "",
       institution: "",
+      institutionCode: "",
+      institutionIspb: "",
+      institutionLogoUrl: "",
       type: "credito",
       lastFourDigits: "",
       limit: 0,
@@ -68,8 +77,32 @@ export default function CardForm({ formId, initial, onSubmit }: CardFormProps) {
         <input id="name" className={inputClass} placeholder="Ex: EM DIA Platinum" {...register("name")} />
       </FormField>
 
-      <FormField label="Instituição" htmlFor="institution" error={errors.institution?.message}>
-        <input id="institution" className={inputClass} placeholder="Ex: Itaú, Nubank..." {...register("institution")} />
+      <FormField label="Instituição" error={errors.institution?.message}>
+        <Controller
+          control={control}
+          name="institution"
+          render={({ field }) => (
+            <BankSelect
+              value={
+                field.value
+                  ? {
+                      name: field.value,
+                      code: watch("institutionCode") ?? "",
+                      ispb: watch("institutionIspb") ?? "",
+                      fullName: field.value,
+                      logoUrl: watch("institutionLogoUrl") || undefined,
+                    }
+                  : undefined
+              }
+              onSelect={(inst: FinancialInstitution) => {
+                setValue("institution", inst.name);
+                setValue("institutionCode", inst.code);
+                setValue("institutionIspb", inst.ispb);
+                setValue("institutionLogoUrl", inst.logoUrl ?? "");
+              }}
+            />
+          )}
+        />
       </FormField>
 
       <div className="grid grid-cols-2 gap-3">

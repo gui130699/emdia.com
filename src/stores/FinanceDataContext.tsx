@@ -23,6 +23,7 @@ import type {
   GoalContribution,
   Transaction,
 } from "../types/finance";
+import type { FinancialInstitution } from "../types/institution";
 
 interface FinanceDataValue {
   loading: boolean;
@@ -33,7 +34,7 @@ interface FinanceDataValue {
   categories: Category[];
   bankAccounts: BankAccount[];
 
-  addBankAccount: (name: string, kind: BankAccount["kind"]) => Promise<void>;
+  addBankAccount: (name: string, kind: BankAccount["kind"], institution?: FinancialInstitution) => Promise<void>;
   deleteBankAccount: (id: string) => Promise<void>;
 
   addTransaction: (input: TransactionInput) => Promise<void>;
@@ -118,8 +119,8 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       categories,
       bankAccounts,
 
-      async addBankAccount(name, kind) {
-        await bankAccountService.create(userId, name, kind);
+      async addBankAccount(name, kind, institution) {
+        await bankAccountService.create(userId, name, kind, institution);
         setBankAccounts(await bankAccountService.list(userId));
       },
       async deleteBankAccount(id) {

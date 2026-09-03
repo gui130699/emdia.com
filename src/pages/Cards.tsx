@@ -6,7 +6,8 @@ import EmptyState from "../components/ui/EmptyState";
 import ProgressBar from "../components/ui/ProgressBar";
 import CategoryChart from "../components/charts/CategoryChart";
 import CardDrawer from "../components/cards/CardDrawer";
-import CreditCardVisual from "../components/cards/CreditCardVisual";
+import CardCarousel from "../components/cards/CardCarousel";
+import CardsSummaryTable from "../components/cards/CardsSummaryTable";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useAuth } from "../contexts/AuthContext";
@@ -87,7 +88,7 @@ export default function Cards() {
       />
 
       <div className="space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           <SummaryCard icon={Wallet} label="Limite total" value={formatCurrency(totalLimit)} />
           <SummaryCard icon={CardIcon} iconClassName="bg-brand-50 text-brand-600" label="Disponível" value={formatCurrency(totalAvailable)} />
           <SummaryCard
@@ -107,13 +108,7 @@ export default function Cards() {
           <EmptyState icon={CreditCard} title="Nenhum cartão cadastrado" description="Adicione seu primeiro cartão para acompanhar faturas e limites." actionLabel="Adicionar cartão" onAction={() => setDrawerOpen(true)} />
         ) : (
           <>
-            <div className="flex flex-wrap gap-4">
-              {creditCards.map((card) => (
-                <button key={card.id} onClick={() => setSelectedCardId(card.id)} className={`rounded-2xl ${selectedCard?.id === card.id ? "ring-2 ring-brand-500" : ""}`}>
-                  <CreditCardVisual card={card} />
-                </button>
-              ))}
-            </div>
+            <CardCarousel cards={creditCards} selectedId={selectedCard?.id} onSelect={setSelectedCardId} />
 
             {activeInvoice && (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -171,29 +166,8 @@ export default function Cards() {
 
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
               <h2 className="text-base font-bold text-ink-900">Resumo dos cartões</h2>
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-ink-100 text-xs uppercase tracking-wide text-ink-400">
-                      <th className="py-2.5 pr-3 font-medium">Cartão</th>
-                      <th className="py-2.5 pr-3 font-medium">Limite</th>
-                      <th className="py-2.5 pr-3 font-medium">Utilizado</th>
-                      <th className="py-2.5 pr-3 font-medium">Disponível</th>
-                      <th className="py-2.5 pr-3 font-medium">Vencimento</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoicesByCard.map(({ card, total, period }) => (
-                      <tr key={card.id} className="border-b border-ink-100 last:border-0">
-                        <td className="py-2.5 pr-3 font-medium text-ink-900">{card.name} •••• {card.lastFourDigits}</td>
-                        <td className="py-2.5 pr-3 text-ink-500">{formatCurrency(card.limit)}</td>
-                        <td className="py-2.5 pr-3 text-ink-500">{formatCurrency(total)}</td>
-                        <td className="py-2.5 pr-3 text-ink-500">{formatCurrency(card.limit - total)}</td>
-                        <td className="py-2.5 pr-3 text-ink-500">{formatDateObj(period.dueDate)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="mt-3">
+                <CardsSummaryTable rows={invoicesByCard} />
               </div>
             </div>
           </>

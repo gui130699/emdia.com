@@ -26,8 +26,8 @@ export default function CurrencyInput({ id, value, onChange, placeholder }: Curr
   }
 
   return (
-    <div className="flex items-center rounded-lg border border-ink-100 bg-surface px-3 focus-within:border-brand-500">
-      <span className="text-sm text-ink-400">R$</span>
+    <div className="flex min-h-11 items-center rounded-lg border border-ink-100 bg-surface px-3 focus-within:border-brand-500 md:min-h-0">
+      <span className="text-base text-ink-400 md:text-sm">R$</span>
       <input
         id={id}
         type="text"
@@ -35,7 +35,7 @@ export default function CurrencyInput({ id, value, onChange, placeholder }: Curr
         value={centsToDisplay(cents)}
         onChange={handleChange}
         placeholder={placeholder}
-        className="w-full border-none bg-transparent px-2 py-2.5 text-sm text-ink-900 outline-none"
+        className="w-full border-none bg-transparent px-2 py-2.5 text-base text-ink-900 outline-none md:text-sm"
       />
     </div>
   );

@@ -49,7 +49,18 @@ export default function GoalCard({ goal, onEdit, onDelete, onContribute, onWithd
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-sm">
+      {/* Mobile: stacked amounts + deadline. Desktop row below is unchanged. */}
+      <div className="mt-4 space-y-1 text-sm md:hidden">
+        <div className="flex items-center justify-between">
+          <span className="text-ink-500">
+            {formatCurrency(goal.currentAmount)} de {formatCurrency(goal.targetAmount)}
+          </span>
+          <span className="font-bold text-brand-700">{percent.toFixed(0)}%</span>
+        </div>
+        <p className="text-xs text-ink-400">Prazo: {formatDate(goal.deadline)}</p>
+      </div>
+
+      <div className="mt-4 hidden items-center justify-between text-sm md:flex">
         <span className="text-ink-500">
           {formatCurrency(goal.currentAmount)} de {formatCurrency(goal.targetAmount)}
         </span>

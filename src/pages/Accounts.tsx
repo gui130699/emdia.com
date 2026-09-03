@@ -2,24 +2,18 @@ import { useMemo, useState } from "react";
 import { Plus, CheckCircle2, FileText, Clock, AlertTriangle, Landmark } from "lucide-react";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
-import Badge from "../components/ui/Badge";
 import EmptyState from "../components/ui/EmptyState";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import Modal from "../components/ui/Modal";
 import AccountDrawer from "../components/accounts/AccountDrawer";
 import BillCalendar from "../components/accounts/BillCalendar";
+import AccountsTable from "../components/accounts/AccountsTable";
 import { useLayoutContext } from "../hooks/useLayoutContext";
 import { useFinanceData } from "../stores/FinanceDataContext";
 import { useToast } from "../stores/ToastContext";
 import { formatCurrency } from "../utils/currency";
 import { daysUntil, formatDate, toMonthKey } from "../utils/date";
 import type { AccountBill } from "../types/finance";
-
-const STATUS_CONFIG = {
-  paid: { label: "Paga", tone: "success" as const },
-  upcoming: { label: "A vencer", tone: "warning" as const },
-  overdue: { label: "Atrasada", tone: "danger" as const },
-};
 
 export default function Accounts() {
   const { onOpenMenu } = useLayoutContext();
@@ -88,7 +82,7 @@ export default function Accounts() {
       />
 
       <div className="space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           <SummaryCard icon={FileText} label="Contas do mês" value={String(monthBills.length)} />
           <SummaryCard icon={CheckCircle2} iconClassName="bg-brand-50 text-brand-600" label="Pagas" value={String(paidCount)} />
           <SummaryCard icon={Clock} iconClassName="bg-warning-500/10 text-warning-600" label="A vencer" value={String(upcomingCount)} />
@@ -101,57 +95,17 @@ export default function Accounts() {
             {sortedBills.length === 0 ? (
               <EmptyState icon={Landmark} title="Nenhuma conta cadastrada" actionLabel="Adicionar conta" onAction={openNew} />
             ) : (
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-ink-100 text-xs uppercase tracking-wide text-ink-400">
-                      <th className="py-2.5 pr-3 font-medium">Conta</th>
-                      <th className="py-2.5 pr-3 font-medium">Vencimento</th>
-                      <th className="py-2.5 pr-3 font-medium">Categoria</th>
-                      <th className="py-2.5 pr-3 font-medium">Valor</th>
-                      <th className="py-2.5 pr-3 font-medium">Status</th>
-                      <th className="py-2.5 pl-3 text-right font-medium">Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedBills.map((bill) => {
-                      const status = STATUS_CONFIG[bill.status];
-                      return (
-                        <tr key={bill.id} className="border-b border-ink-100 last:border-0 hover:bg-ink-50/60">
-                          <td className="py-2.5 pr-3 font-medium text-ink-900">{bill.description}</td>
-                          <td className="py-2.5 pr-3 text-ink-500">{formatDate(bill.dueDate)}</td>
-                          <td className="py-2.5 pr-3 text-ink-500">{categoryName(bill.categoryId)}</td>
-                          <td className="py-2.5 pr-3 font-medium text-ink-900">{formatCurrency(bill.amount)}</td>
-                          <td className="py-2.5 pr-3">
-                            <Badge label={status.label} tone={status.tone} />
-                          </td>
-                          <td className="py-2.5 pl-3">
-                            <div className="flex justify-end gap-2">
-                              {bill.status !== "paid" ? (
-                                <button onClick={() => handlePay(bill)} className="rounded-lg border border-brand-600 px-2.5 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-50">
-                                  Pagar
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setEditing(bill);
-                                    setDrawerOpen(true);
-                                  }}
-                                  className="rounded-lg border border-ink-100 px-2.5 py-1 text-xs font-semibold text-ink-500 hover:bg-ink-50"
-                                >
-                                  Editar
-                                </button>
-                              )}
-                              <button onClick={() => setPendingDelete(bill)} className="rounded-lg px-2.5 py-1 text-xs font-semibold text-danger-600 hover:bg-danger-500/10">
-                                Excluir
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="mt-3">
+                <AccountsTable
+                  bills={sortedBills}
+                  categoryName={categoryName}
+                  onPay={handlePay}
+                  onEdit={(bill) => {
+                    setEditing(bill);
+                    setDrawerOpen(true);
+                  }}
+                  onDelete={setPendingDelete}
+                />
               </div>
             )}
           </div>

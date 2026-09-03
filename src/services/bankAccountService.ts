@@ -1,5 +1,6 @@
 import { createLocalCollection, generateId } from "./localStore";
 import type { BankAccount } from "../types/finance";
+import type { FinancialInstitution } from "../types/institution";
 
 const store = createLocalCollection<BankAccount>("bankAccounts");
 
@@ -24,8 +25,24 @@ export const bankAccountService = {
     return seeded;
   },
 
-  async create(userId: string, name: string, kind: BankAccount["kind"]): Promise<BankAccount> {
-    const account: BankAccount = { id: generateId(), userId, name, kind, createdAt: new Date().toISOString() };
+  async create(
+    userId: string,
+    name: string,
+    kind: BankAccount["kind"],
+    institution?: FinancialInstitution
+  ): Promise<BankAccount> {
+    const account: BankAccount = {
+      id: generateId(),
+      userId,
+      name,
+      kind,
+      institutionCode: institution?.code,
+      institutionName: institution?.name,
+      institutionFullName: institution?.fullName,
+      institutionIspb: institution?.ispb,
+      institutionLogoUrl: institution?.logoUrl,
+      createdAt: new Date().toISOString(),
+    };
     return store.create(userId, account);
   },
 

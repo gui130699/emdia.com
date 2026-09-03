@@ -23,7 +23,7 @@ export default function CategoryChart({ data, total }: CategoryChartProps) {
               contentStyle={{
                 borderRadius: 12,
                 borderColor: "var(--color-ink-100)",
-                backgroundColor: "var(--color-white)",
+                backgroundColor: "var(--color-surface)",
                 color: "var(--color-ink-900)",
                 fontSize: 13,
               }}
