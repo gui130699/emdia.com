@@ -17,6 +17,7 @@ import { bankAccountService } from "../services/bankAccountService";
 import { invoiceService } from "../services/invoiceService";
 import { installmentService, type CreateInstallmentPlanInput } from "../services/installmentService";
 import { categorizationRuleService } from "../services/categorizationRuleService";
+import { balanceSnapshotService } from "../services/balanceSnapshotService";
 import { computeAccountBalance, computeTotalBalance } from "../services/balanceService";
 import { generateId } from "../services/localStore";
 import { getCurrentInvoicePeriod, type InvoicePeriod } from "../utils/cardInvoice";
@@ -25,6 +26,7 @@ import { startSyncEngine, subscribeSyncStatus, type AggregateSyncStatus } from "
 import { importService } from "../services/importService";
 import type {
   AccountBill,
+  BalanceSnapshot,
   BankAccount,
   Category,
   CreditCard,
@@ -75,6 +77,7 @@ interface FinanceDataValue {
   installmentPlans: InstallmentPlan[];
   installments: Installment[];
   importBatches: ImportBatch[];
+  balanceSnapshots: BalanceSnapshot[];
 
   getAccountBalance: (accountId: string) => number;
   totalBalance: number;
@@ -84,10 +87,25 @@ interface FinanceDataValue {
     name: string,
     kind: BankAccount["kind"],
     institution?: FinancialInstitution,
-    initialBalance?: number
+    initialBalance?: number,
+    balanceAsOfDate?: string,
+    externalIds?: { externalBankAccountId?: string; externalBranchId?: string }
   ) => Promise<BankAccount>;
   updateBankAccount: (id: string, patch: Partial<Omit<BankAccount, "id" | "userId">>) => Promise<void>;
   deleteBankAccount: (id: string) => Promise<void>;
+
+  /** Records a bank-reported balance for an account (manual entry, an OFX
+   * ledger balance, or an explicit reconciliation) and compares it against
+   * what EM DIA computes for that same date — never silently overwrites
+   * the calculated balance. */
+  reconcileAccountBalance: (
+    accountId: string,
+    reportedBalance: number,
+    asOfDate: string,
+    source: BalanceSnapshot["source"],
+    importBatchId?: string
+  ) => Promise<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" }>;
+  createBalanceAdjustment: (accountId: string, amount: number, date: string, notes?: string) => Promise<void>;
 
   addTransaction: (input: TransactionInput) => Promise<void>;
   updateTransaction: (id: string, input: Partial<TransactionInput>) => Promise<void>;
@@ -103,7 +121,11 @@ interface FinanceDataValue {
 
   addCard: (input: CreditCardInput) => Promise<void>;
   updateCard: (id: string, input: Partial<CreditCardInput>) => Promise<void>;
-  deleteCard: (id: string) => Promise<void>;
+  /** Refuses (with a reason listing what's attached) when the card has any
+   * purchases, invoices or installments — use archiveCard instead. */
+  deleteCard: (id: string) => Promise<OperationResult>;
+  archiveCard: (id: string) => Promise<void>;
+  reactivateCard: (id: string) => Promise<void>;
   payInvoice: (input: PayInvoiceInput) => Promise<void>;
   reopenInvoice: (invoiceId: string) => Promise<void>;
   deleteInstallmentPlan: (id: string) => Promise<OperationResult>;
@@ -146,10 +168,11 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
   const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlan[]>([]);
   const [installments, setInstallments] = useState<Installment[]>([]);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
+  const [balanceSnapshots, setBalanceSnapshots] = useState<BalanceSnapshot[]>([]);
 
   const reloadAll = useCallback(async () => {
     if (!userId) return;
-    const [t, b, c, g, cat, acc, inv, plans, insts, batches] = await Promise.all([
+    const [t, b, c, g, cat, acc, inv, plans, insts, batches, snapshots] = await Promise.all([
       transactionService.list(userId),
       accountService.list(userId),
       cardService.list(userId),
@@ -160,6 +183,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       installmentService.listPlans(userId),
       installmentService.listInstallments(userId),
       importService.listBatches(userId),
+      balanceSnapshotService.list(userId),
     ]);
     setTransactions(t);
     setBills(b);
@@ -171,6 +195,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
     setInstallmentPlans(plans);
     setInstallments(insts);
     setImportBatches(batches);
+    setBalanceSnapshots(snapshots);
     void categorizationRuleService.seedIfEmpty(userId, cat);
   }, [userId]);
 
@@ -206,20 +231,80 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       installmentPlans,
       installments,
       importBatches,
+      balanceSnapshots,
 
       getAccountBalance(accountId) {
         const account = bankAccounts.find((a) => a.id === accountId);
-        return account ? computeAccountBalance(account, transactions) : 0;
+        return account ? computeAccountBalance(account, transactions, balanceSnapshots) : 0;
       },
-      totalBalance: computeTotalBalance(bankAccounts, transactions),
+      totalBalance: computeTotalBalance(bankAccounts, transactions, balanceSnapshots),
       getCategoryUsageCount(categoryId) {
         return transactions.filter((t) => t.categoryId === categoryId).length;
       },
 
-      async addBankAccount(name, kind, institution, initialBalance) {
-        const account = await bankAccountService.create(userId, { name, kind, institution, initialBalance });
+      async addBankAccount(name, kind, institution, initialBalance, balanceAsOfDate, externalIds) {
+        const account = await bankAccountService.create(userId, {
+          name,
+          kind,
+          institution,
+          initialBalance,
+          externalBankAccountId: externalIds?.externalBankAccountId,
+          externalBranchId: externalIds?.externalBranchId,
+        });
+        if (initialBalance !== undefined && balanceAsOfDate) {
+          await balanceSnapshotService.create(userId, {
+            accountId: account.id,
+            balance: initialBalance,
+            asOfDate: balanceAsOfDate,
+            source: "manual",
+          });
+          setBalanceSnapshots(await balanceSnapshotService.list(userId));
+        }
         setBankAccounts(await bankAccountService.list(userId));
         return account;
+      },
+      async reconcileAccountBalance(accountId, reportedBalance, asOfDate, source, importBatchId) {
+        // Reads fresh from IndexedDB rather than the React-state closure:
+        // this is often called right after reloadAll() from the same
+        // call site (e.g. right after committing an import), and the
+        // closures captured here can still be one render behind that
+        // reload — using them would compare against stale/empty data.
+        const [freshAccount, freshTransactions] = await Promise.all([
+          bankAccountService.get(userId, accountId),
+          transactionService.list(userId),
+        ]);
+        const priorSnapshots = await balanceSnapshotService.listForAccount(userId, accountId);
+        const relevantTransactions = freshTransactions.filter((t) => t.date <= asOfDate);
+        const calculated = freshAccount ? computeAccountBalance(freshAccount, relevantTransactions, priorSnapshots) : reportedBalance;
+        const difference = Math.round((reportedBalance - calculated) * 100) / 100;
+        const status: "conferred" | "discrepancy" = Math.abs(difference) < 0.01 ? "conferred" : "discrepancy";
+
+        await balanceSnapshotService.create(userId, { accountId, balance: reportedBalance, asOfDate, source, importBatchId });
+        setBalanceSnapshots(await balanceSnapshotService.list(userId));
+
+        await bankAccountService.update(userId, accountId, {
+          reconciliationStatus: status,
+          lastReconciledAt: new Date().toISOString(),
+        });
+        setBankAccounts(await bankAccountService.list(userId));
+
+        return { calculated, reported: reportedBalance, difference, status };
+      },
+      async createBalanceAdjustment(accountId, amount, date, notes) {
+        await transactionService.create(userId, {
+          type: amount >= 0 ? "income" : "expense",
+          description: "Ajuste de saldo",
+          amount: Math.abs(amount),
+          date,
+          categoryId: "",
+          accountId,
+          paymentMethod: "transferencia",
+          recurring: false,
+          source: "system",
+          transactionSubtype: "balance_adjustment",
+          notes,
+        });
+        setTransactions(await transactionService.list(userId));
       },
       async updateBankAccount(id, patch) {
         await bankAccountService.update(userId, id, patch);
@@ -385,7 +470,25 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setCards(await cardService.list(userId));
       },
       async deleteCard(id) {
+        const purchaseCount = transactions.filter((t) => t.cardId === id).length;
+        const invoiceCount = invoices.filter((inv) => inv.cardId === id).length;
+        const planCount = installmentPlans.filter((p) => p.cardId === id).length;
+        if (purchaseCount > 0 || invoiceCount > 0 || planCount > 0) {
+          return {
+            ok: false,
+            reason: `Este cartão possui ${purchaseCount} compra(s), ${invoiceCount} fatura(s) e ${planCount} parcelamento(s) vinculados. Arquive o cartão em vez de excluí-lo.`,
+          };
+        }
         await cardService.remove(userId, id);
+        setCards(await cardService.list(userId));
+        return { ok: true };
+      },
+      async archiveCard(id) {
+        await cardService.update(userId, id, { archived: true, archivedAt: new Date().toISOString() });
+        setCards(await cardService.list(userId));
+      },
+      async reactivateCard(id) {
+        await cardService.update(userId, id, { archived: false, archivedAt: undefined });
         setCards(await cardService.list(userId));
       },
 
@@ -498,6 +601,7 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
       installmentPlans,
       installments,
       importBatches,
+      balanceSnapshots,
       userId,
       reloadAll,
     ]

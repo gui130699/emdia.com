@@ -39,6 +39,7 @@ const SYNCED_ENTITIES = [
   "importBatches",
   "importMappings",
   "categorizationRules",
+  "balanceSnapshots",
 ] as const;
 
 export async function enqueueSync(

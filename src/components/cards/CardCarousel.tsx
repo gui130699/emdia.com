@@ -1,14 +1,33 @@
 import { useRef, useState } from "react";
 import CreditCardVisual from "./CreditCardVisual";
+import CardActionsMenu from "./CardActionsMenu";
 import type { CreditCard } from "../../types/finance";
 
 interface CardCarouselProps {
   cards: CreditCard[];
   selectedId?: string;
   onSelect: (id: string) => void;
+  onEdit: (card: CreditCard) => void;
+  onViewDetails: (card: CreditCard) => void;
+  onViewInvoices: (card: CreditCard) => void;
+  onViewInstallments: (card: CreditCard) => void;
+  onArchive: (card: CreditCard) => void;
+  onReactivate: (card: CreditCard) => void;
+  onDelete: (card: CreditCard) => void;
 }
 
-export default function CardCarousel({ cards, selectedId, onSelect }: CardCarouselProps) {
+export default function CardCarousel({
+  cards,
+  selectedId,
+  onSelect,
+  onEdit,
+  onViewDetails,
+  onViewInvoices,
+  onViewInstallments,
+  onArchive,
+  onReactivate,
+  onDelete,
+}: CardCarouselProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -27,15 +46,26 @@ export default function CardCarousel({ cards, selectedId, onSelect }: CardCarous
         className="no-scrollbar -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:snap-none sm:overflow-visible sm:px-0"
       >
         {cards.map((card) => (
-          <button
-            key={card.id}
-            onClick={() => onSelect(card.id)}
-            className={`w-[82vw] max-w-xs shrink-0 snap-center rounded-2xl sm:w-auto ${
-              selectedId === card.id ? "ring-2 ring-brand-500" : ""
-            }`}
-          >
-            <CreditCardVisual card={card} />
-          </button>
+          <div key={card.id} className="relative w-[82vw] max-w-xs shrink-0 snap-center sm:w-auto">
+            <button
+              onClick={() => onSelect(card.id)}
+              className={`block w-full rounded-2xl text-left ${selectedId === card.id ? "ring-2 ring-brand-500" : ""} ${
+                card.archived ? "opacity-60" : ""
+              }`}
+            >
+              <CreditCardVisual card={card} />
+            </button>
+            <CardActionsMenu
+              card={card}
+              onEdit={() => onEdit(card)}
+              onViewDetails={() => onViewDetails(card)}
+              onViewInvoices={() => onViewInvoices(card)}
+              onViewInstallments={() => onViewInstallments(card)}
+              onArchive={() => onArchive(card)}
+              onReactivate={() => onReactivate(card)}
+              onDelete={() => onDelete(card)}
+            />
+          </div>
         ))}
       </div>
 

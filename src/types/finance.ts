@@ -1,5 +1,7 @@
 export type BankAccountKind = "corrente" | "poupanca" | "digital" | "carteira" | "outro";
 
+export type ReconciliationStatus = "unreconciled" | "conferred" | "discrepancy";
+
 export interface BankAccount {
   id: string;
   userId: string;
@@ -10,10 +12,39 @@ export interface BankAccount {
   institutionFullName?: string;
   institutionIspb?: string;
   institutionLogoUrl?: string;
-  /** Starting balance when the account was registered in EM DIA. The
-   * current balance is always computed (initialBalance + movements),
-   * never stored/edited directly. */
+  /** Legacy fallback only, used when the account has no BalanceSnapshot at
+   * all (e.g. accounts created before this feature existed, or a wallet
+   * the user just wants to track from zero). Whenever a snapshot exists,
+   * the current balance is computed from the most recent one instead —
+   * never from this field plus the account's entire transaction history. */
   initialBalance: number;
+  /** The bank's own account/branch identifiers, kept so a future OFX import
+   * can recognize this is the same account automatically. Always masked
+   * when shown in the UI — never a credential. */
+  externalBankAccountId?: string;
+  externalBranchId?: string;
+  /** Set after each reconciliation check (see BalanceSnapshot) so the
+   * account list can show "Saldo conferido" / "Diferença encontrada". */
+  reconciliationStatus?: ReconciliationStatus;
+  lastReconciledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type BalanceSnapshotSource = "manual" | "ofx" | "csv" | "reconciliation";
+
+/** A known-good balance at a point in time, used as the base for computing
+ * the account's current balance (snapshot + movements after asOfDate) —
+ * far safer than assuming a single initialBalance covers the account's
+ * entire history when that balance was actually reported much later. */
+export interface BalanceSnapshot {
+  id: string;
+  userId: string;
+  accountId: string;
+  balance: number;
+  asOfDate: string; // ISO yyyy-MM-dd
+  source: BalanceSnapshotSource;
+  importBatchId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -38,7 +69,7 @@ export type RecurringFrequency =
   | "semiannual"
   | "yearly";
 
-export type TransactionSource = "manual" | "import";
+export type TransactionSource = "manual" | "import" | "system";
 export type ImportSource = "ofx" | "csv" | "pdf";
 
 /** What generated this transaction, for reporting/dedup/undo purposes. */
@@ -49,6 +80,10 @@ export type TransactionOriginType =
   | "transfer"
   | "bank_import"
   | "card_import";
+
+/** Marks a transaction that exists for a structural reason rather than a
+ * real income/expense event — kept out of "regular" category reporting. */
+export type TransactionSubtype = "balance_adjustment";
 
 export interface Transaction {
   id: string;
@@ -75,6 +110,7 @@ export interface Transaction {
   recurring: boolean;
   recurringFrequency?: RecurringFrequency;
   notes?: string;
+  transactionSubtype?: TransactionSubtype;
 
   /** Who created this movement. */
   source: TransactionSource;
@@ -154,6 +190,11 @@ export interface CreditCard {
   /** When true, `color` overrides the institution's automatic theme —
    * priority order is: manual color > institution theme > neutral fallback. */
   useCustomColor?: boolean;
+  /** Archived cards are hidden from purchase/selector pickers by default
+   * but keep their full history (invoices, installments) intact and
+   * reachable. Preferred over deletion whenever the card has any history. */
+  archived?: boolean;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

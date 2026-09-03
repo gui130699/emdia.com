@@ -1,31 +1,56 @@
-import type { BankAccount, Transaction } from "../types/finance";
+import type { BalanceSnapshot, BankAccount, Transaction } from "../types/finance";
+
+function movesAccount(t: Transaction, accountId: string, sinceDate?: string): number {
+  if (sinceDate && t.date <= sinceDate) return 0;
+  if (t.type === "transfer") {
+    if (t.accountId === accountId) return -t.amount;
+    if (t.destinationAccountId === accountId) return t.amount;
+    return 0;
+  }
+  if (t.accountId !== accountId) return 0;
+  if (t.type === "income") return t.amount;
+  if (t.type === "expense") return -t.amount;
+  return 0;
+}
 
 /**
- * The current balance of an account is always derived, never stored:
- *   saldo = saldo inicial + receitas − despesas + transferências recebidas
- *           − transferências enviadas
+ * The current balance of an account is always derived, never stored.
  *
- * Credit-card purchases never appear here (they carry a cardId, not this
- * account's id) — only the invoice payment transaction, which is a normal
- * expense against the account used to pay it, touches the balance.
+ * When the account has a BalanceSnapshot (a known-good balance reported at
+ * a specific date — from manual entry, an OFX ledger balance, or a
+ * reconciliation), that snapshot is the base and only movements dated
+ * *after* it are added — never the account's entire transaction history,
+ * which would double-count whatever the snapshot already reflects.
+ *
+ * Only when there's no snapshot at all do we fall back to the legacy
+ * initialBalance + full history behavior (e.g. accounts created before
+ * this feature existed).
  */
-export function computeAccountBalance(account: BankAccount, transactions: Transaction[]): number {
-  let balance = account.initialBalance;
+export function computeAccountBalance(
+  account: BankAccount,
+  transactions: Transaction[],
+  snapshots: BalanceSnapshot[] = []
+): number {
+  const accountSnapshots = snapshots.filter((s) => s.accountId === account.id);
+  const latest = accountSnapshots.reduce<BalanceSnapshot | undefined>(
+    (best, s) => (!best || s.asOfDate > best.asOfDate ? s : best),
+    undefined
+  );
+
+  let balance = latest ? latest.balance : account.initialBalance;
+  const sinceDate = latest?.asOfDate;
 
   for (const t of transactions) {
-    if (t.type === "transfer") {
-      if (t.accountId === account.id) balance -= t.amount;
-      if (t.destinationAccountId === account.id) balance += t.amount;
-      continue;
-    }
-    if (t.accountId !== account.id) continue;
-    if (t.type === "income") balance += t.amount;
-    else if (t.type === "expense") balance -= t.amount;
+    balance += movesAccount(t, account.id, sinceDate);
   }
 
   return balance;
 }
 
-export function computeTotalBalance(accounts: BankAccount[], transactions: Transaction[]): number {
-  return accounts.reduce((sum, account) => sum + computeAccountBalance(account, transactions), 0);
+export function computeTotalBalance(
+  accounts: BankAccount[],
+  transactions: Transaction[],
+  snapshots: BalanceSnapshot[] = []
+): number {
+  return accounts.reduce((sum, account) => sum + computeAccountBalance(account, transactions, snapshots), 0);
 }

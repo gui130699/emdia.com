@@ -12,6 +12,7 @@ export interface OfxTransaction {
 export interface ParsedOfx {
   isCreditCard: boolean;
   bankId?: string;
+  branchId?: string;
   accountId?: string;
   accountType?: string;
   balance?: { amount: number; asOf?: string };
@@ -82,6 +83,7 @@ export function parseOfx(raw: string): ParsedOfx {
   return {
     isCreditCard,
     bankId: text(acctNode, "BANKID"),
+    branchId: text(acctNode, "BRANCHID"),
     accountId: text(acctNode, "ACCTID"),
     accountType: text(acctNode, "ACCTTYPE"),
     balance: balanceAmount

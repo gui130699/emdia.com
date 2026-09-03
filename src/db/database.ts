@@ -1,6 +1,7 @@
 import Dexie, { type Table } from "dexie";
 import type {
   AccountBill,
+  BalanceSnapshot,
   BankAccount,
   CategorizationRule,
   Category,
@@ -54,6 +55,7 @@ export class EmDiaDatabase extends Dexie {
   importBatches!: Table<ImportBatch, string>;
   importMappings!: Table<ImportMapping, string>;
   categorizationRules!: Table<CategorizationRule, string>;
+  balanceSnapshots!: Table<BalanceSnapshot, string>;
   syncQueue!: Table<SyncQueueItem, string>;
 
   constructor(userId: string) {
@@ -73,6 +75,9 @@ export class EmDiaDatabase extends Dexie {
       importMappings: "id, columnSignature",
       categorizationRules: "id, priority",
       syncQueue: "id, status, entity, createdAt",
+    });
+    this.version(2).stores({
+      balanceSnapshots: "id, accountId, asOfDate, importBatchId",
     });
   }
 }

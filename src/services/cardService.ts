@@ -36,7 +36,7 @@ export const cardService = {
     return store.create(userId, card);
   },
 
-  async update(userId: string, id: string, input: Partial<CreditCardInput>) {
+  async update(userId: string, id: string, input: Partial<Omit<CreditCard, "id" | "userId">>) {
     return store.update(userId, id, { ...input, updatedAt: new Date().toISOString() });
   },
 

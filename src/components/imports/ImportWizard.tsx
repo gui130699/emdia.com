@@ -1,17 +1,19 @@
 import { useMemo, useState } from "react";
-import { X, Upload, CheckCircle2, AlertTriangle, Copy } from "lucide-react";
+import { X, Upload, CheckCircle2, AlertTriangle, Copy, Landmark } from "lucide-react";
 import Badge from "../ui/Badge";
 import FormField from "../ui/FormField";
+import CurrencyInput from "../ui/CurrencyInput";
 import { inputClass } from "../ui/formStyles";
 import { useFinanceData } from "../../stores/FinanceDataContext";
 import { useToast } from "../../stores/ToastContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { formatCurrency } from "../../utils/currency";
-import { formatDate } from "../../utils/date";
+import { formatDate, todayISO } from "../../utils/date";
 import {
   buildCsvPreview,
   buildOfxPreview,
   detectCsvColumnSignature,
+  findInstitutionByOfxBankId,
   guessCsvMapping,
   parseCsvFile,
   parseOfxFile,
@@ -21,7 +23,7 @@ import {
   type ImportPreviewRow,
 } from "../../services/importService";
 import type { ParsedOfx } from "../../utils/ofxParser";
-import type { ImportRecordStatus } from "../../types/finance";
+import type { BankAccountKind, ImportRecordStatus } from "../../types/finance";
 
 interface ImportWizardProps {
   open: boolean;
@@ -38,16 +40,43 @@ const STATUS_BADGE: Record<ImportRecordStatus, { label: string; tone: "success" 
   invalid: { label: "Inválido", tone: "danger" },
 };
 
-type Step = "select" | "mapping" | "preview";
+const KIND_LABELS: Record<BankAccountKind, string> = {
+  corrente: "Conta corrente",
+  poupanca: "Poupança",
+  digital: "Conta digital",
+  carteira: "Carteira / Dinheiro",
+  outro: "Outro",
+};
+
+function maskIdentifier(value?: string): string {
+  if (!value) return "—";
+  if (value.length <= 4) return "••" + value;
+  return "••••" + value.slice(-4);
+}
+
+type Step = "select" | "match" | "choose-account" | "mapping" | "preview" | "reconciliation";
 
 export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixedCardId }: ImportWizardProps) {
-  const { bankAccounts, cards, transactions, bills, categories, invoices, installmentPlans, installments, addBankAccount, reloadAll } = useFinanceData();
+  const {
+    bankAccounts,
+    cards,
+    transactions,
+    bills,
+    categories,
+    invoices,
+    installmentPlans,
+    installments,
+    addBankAccount,
+    reconcileAccountBalance,
+    createBalanceAdjustment,
+    reloadAll,
+  } = useFinanceData();
   const { show } = useToast();
   const { currentUser } = useAuth();
   const userId = currentUser?.uid ?? "";
 
   const [step, setStep] = useState<Step>("select");
-  const [targetAccountId, setTargetAccountId] = useState(fixedAccountId ?? bankAccounts[0]?.id ?? "");
+  const [targetAccountId, setTargetAccountId] = useState(fixedAccountId ?? "");
   const [targetCardId, setTargetCardId] = useState(fixedCardId ?? cards.find((c) => c.type === "credito")?.id ?? "");
   const [loadingLabel, setLoadingLabel] = useState("");
 
@@ -59,7 +88,22 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [rows, setRows] = useState<ImportPreviewRow[]>([]);
   const [lastOfx, setLastOfx] = useState<ParsedOfx | null>(null);
+  const [committedBatchId, setCommittedBatchId] = useState<string | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" } | null>(null);
+  const [correctedBalance, setCorrectedBalance] = useState(0);
+
+  // "match" step (OFX account imports only)
+  const [detectedCode, setDetectedCode] = useState<string | undefined>();
+  const [detectedName, setDetectedName] = useState<string | undefined>();
+  const [candidateAccountId, setCandidateAccountId] = useState<string | undefined>();
+  const [choosingOther, setChoosingOther] = useState(false);
+  const [otherAccountId, setOtherAccountId] = useState("");
+  const [mismatchConfirmed, setMismatchConfirmed] = useState(false);
   const [creatingAccount, setCreatingAccount] = useState(false);
+  const [newAccountName, setNewAccountName] = useState("");
+  const [newAccountKind, setNewAccountKind] = useState<BankAccountKind>("corrente");
+  const [newAccountBalance, setNewAccountBalance] = useState(0);
+  const [newAccountAsOf, setNewAccountAsOf] = useState(todayISO());
 
   const creditCards = cards.filter((c) => c.type === "credito");
   const target = mode === "card" ? { cardId: targetCardId } : { accountId: targetAccountId };
@@ -71,6 +115,16 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setCsvRows([]);
     setPreview(null);
     setRows([]);
+    setLastOfx(null);
+    setCommittedBatchId(null);
+    setReconciliation(null);
+    setDetectedCode(undefined);
+    setDetectedName(undefined);
+    setCandidateAccountId(undefined);
+    setChoosingOther(false);
+    setOtherAccountId("");
+    setMismatchConfirmed(false);
+    setTargetAccountId(fixedAccountId ?? "");
     setLoadingLabel("");
   }
 
@@ -79,91 +133,161 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     onClose();
   }
 
-  async function runPreview(source: "ofx" | "csv", text: string) {
-    const ctx = {
+  function buildCtx(accountId?: string, extraAccounts: typeof bankAccounts = []) {
+    return {
       userId,
-      target,
+      target: mode === "card" ? { cardId: targetCardId } : { accountId },
       existingTransactions: transactions,
       bills,
-      bankAccounts,
+      bankAccounts: [...bankAccounts, ...extraAccounts],
       categories,
       cards,
       invoices,
       installmentPlans,
       installments,
     };
-    if (source === "ofx") {
-      setLoadingLabel("Analisando arquivo...");
-      const ofx = parseOfxFile(text);
-      setLastOfx(ofx);
-      setLoadingLabel("Verificando duplicidades...");
-      const result = await buildOfxPreview(ctx, fileName, ofx);
-      setPreview(result);
-      setRows(result.rows);
-      setStep("preview");
-    } else {
-      const { headers, rows: parsedRows } = parseCsvFile(text);
-      const guess = guessCsvMapping(headers);
-      setCsvHeaders(headers);
-      setCsvRows(parsedRows);
-      if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
-        setLoadingLabel("Verificando duplicidades...");
-        const result = await buildCsvPreview(ctx, fileName, headers, parsedRows, guess as CsvColumnMapping);
-        setPreview(result);
-        setRows(result.rows);
-        setStep("preview");
-      } else {
-        setMapping({ dateColumn: guess.dateColumn ?? "", descriptionColumn: guess.descriptionColumn ?? "", amountColumn: guess.amountColumn });
-        setStep("mapping");
-      }
-    }
-    setLoadingLabel("");
   }
 
-  async function handleCreateDetectedAccount() {
-    if (!preview?.institutionCode || !preview.institutionName || !lastOfx) return;
-    setCreatingAccount(true);
-    try {
-      const account = await addBankAccount(
-        preview.institutionName,
-        "corrente",
-        { code: preview.institutionCode, name: preview.institutionName, fullName: preview.institutionName, ispb: "" },
-        0
-      );
-      setTargetAccountId(account.id);
-      setLoadingLabel("Verificando duplicidades...");
-      const ctx = {
-        userId,
-        target: { accountId: account.id },
-        existingTransactions: transactions,
-        bills,
-        bankAccounts: [...bankAccounts, account],
-        categories,
-        cards,
-        invoices,
-        installmentPlans,
-        installments,
-      };
-      const result = await buildOfxPreview(ctx, fileName, lastOfx);
-      setPreview(result);
-      setRows(result.rows);
-      show(`Conta "${account.name}" criada.`);
-    } finally {
-      setCreatingAccount(false);
-      setLoadingLabel("");
-    }
+  async function runOfxPreview(accountId: string, ofx: ParsedOfx, extraAccounts: typeof bankAccounts = []) {
+    setLoadingLabel("Verificando duplicidades...");
+    const ctx = buildCtx(accountId, extraAccounts);
+    const result = await buildOfxPreview(ctx, fileName, ofx);
+    setPreview(result);
+    setRows(result.rows);
+    setTargetAccountId(accountId);
+    setStep("preview");
+    setLoadingLabel("");
   }
 
   async function handleFile(file: File) {
     setFileName(file.name);
     setLoadingLabel("Lendo arquivo...");
-    const text = await file.text();
-    const isOfx = /\.ofx$/i.test(file.name);
     try {
-      await runPreview(isOfx ? "ofx" : "csv", text);
+      const text = await file.text();
+      const isOfx = /\.ofx$/i.test(file.name);
+
+      if (mode === "card") {
+        setLoadingLabel("Analisando arquivo...");
+        if (isOfx) {
+          const ofx = parseOfxFile(text);
+          setLastOfx(ofx);
+          await runOfxPreview(targetCardId, ofx);
+        } else {
+          await handleCsvFile(text);
+        }
+        return;
+      }
+
+      if (isOfx) {
+        setLoadingLabel("Analisando arquivo...");
+        const ofx = parseOfxFile(text);
+        setLastOfx(ofx);
+
+        if (fixedAccountId) {
+          await runOfxPreview(fixedAccountId, ofx);
+          return;
+        }
+
+        const institution = findInstitutionByOfxBankId(ofx.bankId);
+        setDetectedCode(institution?.code ?? ofx.bankId);
+        setDetectedName(institution?.name);
+
+        const exactMatch = ofx.accountId
+          ? bankAccounts.find((a) => a.externalBankAccountId === ofx.accountId)
+          : undefined;
+        if (exactMatch) {
+          await runOfxPreview(exactMatch.id, ofx);
+          return;
+        }
+
+        const byInstitution = (institution?.code ?? ofx.bankId)
+          ? bankAccounts.filter((a) => a.institutionCode === (institution?.code ?? ofx.bankId))
+          : [];
+        setCandidateAccountId(byInstitution.length === 1 ? byInstitution[0].id : undefined);
+        setNewAccountName(institution?.name ?? "Nova conta");
+        setLoadingLabel("");
+        setStep("match");
+      } else {
+        await handleCsvFile(text);
+      }
     } catch (err) {
       setLoadingLabel("");
       show(err instanceof Error ? err.message : "Não foi possível ler este arquivo.", "error");
+    }
+  }
+
+  async function handleCsvFile(text: string) {
+    const { headers, rows: parsedRows } = parseCsvFile(text);
+    const guess = guessCsvMapping(headers);
+    setCsvHeaders(headers);
+    setCsvRows(parsedRows);
+    setLoadingLabel("");
+
+    if (mode === "account" && !fixedAccountId && !targetAccountId) {
+      setStep("choose-account");
+      return;
+    }
+
+    if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
+      await commitCsvPreview(headers, parsedRows, guess as CsvColumnMapping);
+    } else {
+      setMapping({ dateColumn: guess.dateColumn ?? "", descriptionColumn: guess.descriptionColumn ?? "", amountColumn: guess.amountColumn });
+      setStep("mapping");
+    }
+  }
+
+  async function commitCsvPreview(headers: string[], parsedRows: string[][], m: CsvColumnMapping) {
+    setLoadingLabel("Verificando duplicidades...");
+    const ctx = buildCtx(mode === "card" ? undefined : targetAccountId || fixedAccountId);
+    const result = await buildCsvPreview(ctx, fileName, headers, parsedRows, m);
+    setPreview(result);
+    setRows(result.rows);
+    setLoadingLabel("");
+    setStep("preview");
+  }
+
+  async function confirmChooseAccount() {
+    if (!targetAccountId) return;
+    if (csvHeaders.length > 0) {
+      const guess = guessCsvMapping(csvHeaders);
+      if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
+        await commitCsvPreview(csvHeaders, csvRows, guess as CsvColumnMapping);
+      } else {
+        setMapping({ dateColumn: guess.dateColumn ?? "", descriptionColumn: guess.descriptionColumn ?? "", amountColumn: guess.amountColumn });
+        setStep("mapping");
+      }
+    }
+  }
+
+  async function handleUseCandidateAccount() {
+    if (!candidateAccountId || !lastOfx) return;
+    await runOfxPreview(candidateAccountId, lastOfx);
+  }
+
+  async function handleConfirmOtherAccount() {
+    if (!otherAccountId || !lastOfx) return;
+    const account = bankAccounts.find((a) => a.id === otherAccountId);
+    const mismatched = detectedCode && account?.institutionCode && account.institutionCode !== detectedCode;
+    if (mismatched && !mismatchConfirmed) return;
+    await runOfxPreview(otherAccountId, lastOfx);
+  }
+
+  async function handleCreateAccountForOfx() {
+    if (!lastOfx || !newAccountName.trim()) return;
+    setCreatingAccount(true);
+    try {
+      const account = await addBankAccount(
+        newAccountName.trim(),
+        newAccountKind,
+        detectedCode ? { code: detectedCode, name: detectedName ?? newAccountName, fullName: detectedName ?? newAccountName, ispb: "" } : undefined,
+        newAccountBalance,
+        newAccountAsOf,
+        { externalBankAccountId: lastOfx.accountId, externalBranchId: lastOfx.branchId }
+      );
+      show(`Conta "${account.name}" criada.`);
+      await runOfxPreview(account.id, lastOfx, [account]);
+    } finally {
+      setCreatingAccount(false);
     }
   }
 
@@ -172,13 +296,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       show("Selecione ao menos as colunas de data, descrição e valor.", "error");
       return;
     }
-    setLoadingLabel("Verificando duplicidades...");
-    const ctx = { userId, target, existingTransactions: transactions, bills, bankAccounts, categories, cards, invoices, installmentPlans, installments };
-    const result = await buildCsvPreview(ctx, fileName, csvHeaders, csvRows, mapping);
-    setPreview(result);
-    setRows(result.rows);
-    setLoadingLabel("");
-    setStep("preview");
+    await commitCsvPreview(csvHeaders, csvRows, mapping);
 
     await importService.saveMapping(userId, {
       fileType: "csv",
@@ -222,7 +340,17 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
       const batch = await importService.commit(userId, target, preview, selectedRows);
       await reloadAll();
       show(`Importação concluída: ${batch.importedRecords} lançamento(s) importado(s).`);
-      handleClose();
+
+      if (mode === "account" && lastOfx?.balance && target.accountId) {
+        const asOfDate = lastOfx.balance.asOf ?? preview.periodEnd ?? todayISO();
+        const result = await reconcileAccountBalance(target.accountId, lastOfx.balance.amount, asOfDate, "ofx", batch.id);
+        setCommittedBatchId(batch.id);
+        setReconciliation(result);
+        setCorrectedBalance(result.reported);
+        setStep("reconciliation");
+      } else {
+        handleClose();
+      }
     } catch {
       show("Não foi possível concluir a importação.", "error");
     } finally {
@@ -230,8 +358,30 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     }
   }
 
+  async function handleUseCorrectedBalance() {
+    if (!target.accountId || !lastOfx?.balance) return;
+    const asOfDate = lastOfx.balance.asOf ?? preview?.periodEnd ?? todayISO();
+    await reconcileAccountBalance(target.accountId, correctedBalance, asOfDate, "manual");
+    show("Saldo atualizado.");
+    handleClose();
+  }
+
+  async function handleCreateAdjustment() {
+    if (!target.accountId || !reconciliation) return;
+    const asOfDate = lastOfx?.balance?.asOf ?? preview?.periodEnd ?? todayISO();
+    await createBalanceAdjustment(target.accountId, reconciliation.difference, asOfDate, "Ajuste criado a partir da conferência de importação.");
+    if (committedBatchId) {
+      await reconcileAccountBalance(target.accountId, reconciliation.reported, asOfDate, "reconciliation", committedBatchId);
+    }
+    show("Ajuste de saldo criado.");
+    handleClose();
+  }
+
   if (!open) return null;
 
+  const detectedLabel = detectedName ? `${detectedName}${detectedCode ? ` / código ${detectedCode}` : ""}` : detectedCode;
+  const otherAccount = bankAccounts.find((a) => a.id === otherAccountId);
+  const mismatch = !!(detectedCode && otherAccount?.institutionCode && otherAccount.institutionCode !== detectedCode);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-4" role="dialog" aria-modal="true">
@@ -249,15 +399,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
           {step === "select" && (
             <div className="space-y-4">
-              {mode === "account" ? (
-                <FormField label="Conta financeira" htmlFor="target-account">
-                  <select id="target-account" className={inputClass} value={targetAccountId} onChange={(e) => setTargetAccountId(e.target.value)}>
-                    {bankAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                  </select>
-                </FormField>
-              ) : (
+              {mode === "card" && (
                 <FormField label="Cartão" htmlFor="target-card">
                   <select id="target-card" className={inputClass} value={targetCardId} onChange={(e) => setTargetCardId(e.target.value)}>
                     {creditCards.map((c) => (
@@ -265,6 +407,12 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                     ))}
                   </select>
                 </FormField>
+              )}
+
+              {mode === "account" && !fixedAccountId && (
+                <p className="text-sm text-ink-500">
+                  Selecione o arquivo primeiro — para OFX, identificamos o banco e a conta automaticamente. Para CSV, pediremos a conta em seguida.
+                </p>
               )}
 
               <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 px-6 py-12 text-center hover:border-brand-400 hover:bg-brand-50/40">
@@ -281,6 +429,163 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   }}
                 />
               </label>
+            </div>
+          )}
+
+          {step === "choose-account" && (
+            <div className="space-y-4">
+              <p className="text-sm text-ink-600">
+                Este arquivo CSV não traz identificação do banco. Selecione a qual conta financeira ele pertence.
+              </p>
+              {bankAccounts.length === 0 ? (
+                <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-sm text-warning-700">
+                  Você ainda não possui contas financeiras cadastradas. Cadastre uma conta em Configurações antes de importar este arquivo.
+                </p>
+              ) : (
+                <FormField label="Conta financeira" htmlFor="choose-account">
+                  <select id="choose-account" className={inputClass} value={targetAccountId} onChange={(e) => setTargetAccountId(e.target.value)}>
+                    <option value="">Selecione</option>
+                    {bankAccounts.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </FormField>
+              )}
+              <button
+                onClick={confirmChooseAccount}
+                disabled={!targetAccountId}
+                className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                Continuar
+              </button>
+            </div>
+          )}
+
+          {step === "match" && (
+            <div className="space-y-4">
+              {detectedLabel && (
+                <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">Banco detectado: {detectedLabel}</p>
+              )}
+
+              {!choosingOther && candidateAccountId && (
+                <div className="rounded-xl border border-ink-100 p-4">
+                  <p className="text-sm text-ink-700">
+                    Encontramos uma conta cadastrada compatível: <strong>{bankAccounts.find((a) => a.id === candidateAccountId)?.name}</strong>
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={handleUseCandidateAccount} className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+                      Usar esta conta
+                    </button>
+                    <button onClick={() => setChoosingOther(true)} className="rounded-lg border border-ink-100 px-3 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                      Escolher outra
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!choosingOther && !candidateAccountId && (
+                <div className="rounded-xl border border-ink-100 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Landmark size={18} className="text-brand-600" />
+                    <p className="text-sm font-semibold text-ink-900">Nova conta detectada</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-y-1.5 text-xs text-ink-600">
+                    <span className="text-ink-400">Instituição</span>
+                    <span>{detectedName ?? "Não identificada"}</span>
+                    <span className="text-ink-400">Código</span>
+                    <span>{detectedCode ?? "—"}</span>
+                    <span className="text-ink-400">Tipo</span>
+                    <span>{lastOfx?.accountType ?? "—"}</span>
+                    <span className="text-ink-400">Identificador</span>
+                    <span>{maskIdentifier(lastOfx?.accountId)}</span>
+                  </div>
+                  <p className="mt-3 text-sm text-ink-600">Esta conta ainda não está cadastrada. Cadastrar esta conta no EM DIA?</p>
+
+                  <div className="mt-3 space-y-3 rounded-lg bg-ink-50 p-3">
+                    <FormField label="Nome da conta">
+                      <input className={inputClass} value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} />
+                    </FormField>
+                    <div className="grid grid-cols-2 gap-3">
+                      <FormField label="Tipo">
+                        <select className={inputClass} value={newAccountKind} onChange={(e) => setNewAccountKind(e.target.value as BankAccountKind)}>
+                          {Object.entries(KIND_LABELS).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                      </FormField>
+                      <FormField label="Saldo atual">
+                        <CurrencyInput value={newAccountBalance} onChange={setNewAccountBalance} />
+                      </FormField>
+                    </div>
+                    <FormField label="Posição em">
+                      <input type="date" className={inputClass} value={newAccountAsOf} onChange={(e) => setNewAccountAsOf(e.target.value)} />
+                    </FormField>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={handleCreateAccountForOfx}
+                      disabled={creatingAccount || !newAccountName.trim()}
+                      className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      Cadastrar conta
+                    </button>
+                    <button onClick={() => setChoosingOther(true)} className="rounded-lg border border-ink-100 px-3 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                      Escolher outra conta
+                    </button>
+                    <button onClick={() => setStep("select")} className="rounded-lg px-3 py-2 text-sm font-medium text-ink-400 hover:bg-ink-50">
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {choosingOther && (
+                <div className="rounded-xl border border-ink-100 p-4">
+                  <FormField label="Conta financeira" htmlFor="other-account">
+                    <select
+                      id="other-account"
+                      className={inputClass}
+                      value={otherAccountId}
+                      onChange={(e) => {
+                        setOtherAccountId(e.target.value);
+                        setMismatchConfirmed(false);
+                      }}
+                    >
+                      <option value="">Selecione</option>
+                      {bankAccounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </FormField>
+
+                  {mismatch && (
+                    <div className="mt-3 space-y-2 rounded-lg bg-warning-500/10 p-3 text-sm text-warning-700">
+                      <p>
+                        O extrato parece ser do {detectedName ?? "banco detectado"}, mas você selecionou uma conta{" "}
+                        {otherAccount?.institutionName ?? otherAccount?.name}.
+                      </p>
+                      <label className="flex items-center gap-2 text-xs font-medium">
+                        <input type="checkbox" checked={mismatchConfirmed} onChange={(e) => setMismatchConfirmed(e.target.checked)} />
+                        Tenho certeza, quero continuar mesmo assim.
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={() => setChoosingOther(false)} className="rounded-lg border border-ink-100 px-3 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                      Voltar
+                    </button>
+                    <button
+                      onClick={handleConfirmOtherAccount}
+                      disabled={!otherAccountId || (mismatch && !mismatchConfirmed)}
+                      className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      Confirmar conta
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -338,20 +643,9 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
           {step === "preview" && preview && (
             <div className="space-y-4">
               {preview.institutionName && (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">
-                  <span>
-                    Banco detectado: {preview.institutionName} {preview.institutionCode ? `/ código ${preview.institutionCode}` : ""}
-                  </span>
-                  {mode === "account" && !bankAccounts.some((a) => a.institutionCode === preview.institutionCode) && (
-                    <button
-                      onClick={handleCreateDetectedAccount}
-                      disabled={creatingAccount}
-                      className="rounded-lg border border-brand-600 bg-surface px-2.5 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-50"
-                    >
-                      + Criar conta para {preview.institutionName}
-                    </button>
-                  )}
-                </div>
+                <p className="rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-700">
+                  Banco detectado: {preview.institutionName} {preview.institutionCode ? `/ código ${preview.institutionCode}` : ""}
+                </p>
               )}
 
               <div className="flex flex-wrap items-center gap-3 text-xs text-ink-500">
@@ -435,6 +729,50 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                   );
                 })}
               </ul>
+            </div>
+          )}
+
+          {step === "reconciliation" && reconciliation && (
+            <div className="space-y-4">
+              {reconciliation.status === "conferred" ? (
+                <div className="flex items-center gap-2 rounded-lg bg-brand-50 px-4 py-3 text-sm font-semibold text-brand-700">
+                  <CheckCircle2 size={18} /> Saldo conferido
+                </div>
+              ) : (
+                <div className="space-y-3 rounded-lg bg-warning-500/10 px-4 py-3 text-sm text-warning-700">
+                  <p className="flex items-center gap-2 font-semibold">
+                    <AlertTriangle size={18} /> Encontramos uma diferença de {formatCurrency(Math.abs(reconciliation.difference))}.
+                  </p>
+                  <p className="text-xs">
+                    Saldo informado pelo banco: {formatCurrency(reconciliation.reported)} · Saldo calculado pelo EM DIA: {formatCurrency(reconciliation.calculated)}
+                  </p>
+                </div>
+              )}
+
+              {reconciliation.status === "discrepancy" && (
+                <div className="space-y-3">
+                  <FormField label="Informar saldo correto">
+                    <CurrencyInput value={correctedBalance} onChange={setCorrectedBalance} />
+                  </FormField>
+                  <button onClick={handleUseCorrectedBalance} className="w-full rounded-lg border border-brand-600 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-50">
+                    Informar saldo correto
+                  </button>
+                  <button onClick={handleCreateAdjustment} className="w-full rounded-lg border border-ink-100 py-2 text-sm font-semibold text-ink-600 hover:bg-ink-50">
+                    Criar ajuste de saldo
+                  </button>
+                </div>
+              )}
+
+              <button
+                onClick={handleClose}
+                className={
+                  reconciliation.status === "conferred"
+                    ? "w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700"
+                    : "w-full rounded-lg px-3 py-2 text-sm font-medium text-ink-500 hover:bg-ink-50"
+                }
+              >
+                {reconciliation.status === "conferred" ? "Concluir" : "Revisar movimentações e decidir depois"}
+              </button>
             </div>
           )}
         </div>

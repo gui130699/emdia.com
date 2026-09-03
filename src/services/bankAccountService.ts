@@ -5,35 +5,21 @@ import type { FinancialInstitution } from "../types/institution";
 
 const store = createRepository<BankAccount>("accounts");
 
-const DEFAULT_ACCOUNTS: Array<Pick<BankAccount, "name" | "kind">> = [
-  { name: "Conta corrente", kind: "corrente" },
-  { name: "Conta digital", kind: "digital" },
-];
-
 export interface BankAccountInput {
   name: string;
   kind: BankAccount["kind"];
   initialBalance?: number;
+  balanceAsOfDate?: string;
   institution?: FinancialInstitution;
+  externalBankAccountId?: string;
+  externalBranchId?: string;
 }
 
 export const bankAccountService = {
-  async list(userId: string): Promise<BankAccount[]> {
-    const existing = await store.list(userId);
-    if (existing.length > 0) return existing;
-
-    const now = new Date().toISOString();
-    const seeded = DEFAULT_ACCOUNTS.map((acc) => ({
-      ...acc,
-      id: generateId(),
-      userId,
-      initialBalance: 0,
-      createdAt: now,
-      updatedAt: now,
-    }));
-    await store.replaceAll(userId, seeded);
-    return seeded;
-  },
+  /** Never seeds fictitious default accounts — an empty list here means the
+   * user genuinely has none yet, and the UI must say so explicitly rather
+   * than inventing a "Conta corrente" no one asked for. */
+  list: (userId: string) => store.list(userId),
 
   get: (userId: string, id: string) => store.get(userId, id),
 
@@ -50,6 +36,8 @@ export const bankAccountService = {
       institutionFullName: input.institution?.fullName,
       institutionIspb: input.institution?.ispb,
       institutionLogoUrl: input.institution?.logoUrl,
+      externalBankAccountId: input.externalBankAccountId,
+      externalBranchId: input.externalBranchId,
       createdAt: now,
       updatedAt: now,
     };

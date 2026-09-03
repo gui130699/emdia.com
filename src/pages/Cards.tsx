@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Wallet, CreditCard as CardIcon, Receipt, Calendar, CreditCard, Repeat, Upload } from "lucide-react";
+import { Plus, Wallet, CreditCard as CardIcon, Receipt, Calendar, CreditCard, Repeat, Upload, ChevronDown, ArchiveRestore } from "lucide-react";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
 import EmptyState from "../components/ui/EmptyState";
@@ -10,6 +10,7 @@ import CardDrawer from "../components/cards/CardDrawer";
 import CardCarousel from "../components/cards/CardCarousel";
 import CardsSummaryTable from "../components/cards/CardsSummaryTable";
 import InvoicePaymentModal from "../components/cards/InvoicePaymentModal";
+import InvoiceHistoryModal from "../components/cards/InvoiceHistoryModal";
 import InstallmentPlansSection from "../components/cards/InstallmentPlansSection";
 import ImportWizard from "../components/imports/ImportWizard";
 import { useLayoutContext } from "../hooks/useLayoutContext";
@@ -19,19 +20,27 @@ import { getCurrentInvoicePeriod, transactionsInPeriod } from "../utils/cardInvo
 import { categoryBreakdown } from "../services/reportService";
 import { formatCurrency } from "../utils/currency";
 import { formatDate, formatDateObj } from "../utils/date";
+import type { CreditCard as CreditCardType } from "../types/finance";
 
 export default function Cards() {
   const { onOpenMenu } = useLayoutContext();
-  const { cards, transactions, categories, invoices, reopenInvoice } = useFinanceData();
+  const { cards, transactions, categories, invoices, reopenInvoice, archiveCard, reactivateCard, deleteCard } = useFinanceData();
   const { show } = useToast();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingCard, setEditingCard] = useState<CreditCardType | undefined>();
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [payingInvoice, setPayingInvoice] = useState(false);
   const [pendingReopenInvoiceId, setPendingReopenInvoiceId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [invoiceHistoryCard, setInvoiceHistoryCard] = useState<CreditCardType | null>(null);
+  const [pendingArchive, setPendingArchive] = useState<CreditCardType | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<CreditCardType | null>(null);
+  const [blockedDelete, setBlockedDelete] = useState<{ card: CreditCardType; reason: string } | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
-  const creditCards = cards.filter((c) => c.type === "credito");
+  const creditCards = cards.filter((c) => c.type === "credito" && !c.archived);
+  const archivedCards = cards.filter((c) => c.type === "credito" && c.archived);
   const selectedCard = cards.find((c) => c.id === selectedCardId) ?? creditCards[0];
 
   const invoicesByCard = useMemo(() => {
@@ -69,6 +78,40 @@ export default function Cards() {
 
   function categoryName(id: string) {
     return categories.find((c) => c.id === id)?.name ?? "Outros";
+  }
+
+  async function handleConfirmArchive() {
+    if (!pendingArchive) return;
+    await archiveCard(pendingArchive.id);
+    show(`Cartão "${pendingArchive.name}" arquivado.`);
+    setPendingArchive(null);
+  }
+
+  async function handleReactivate(card: CreditCardType) {
+    await reactivateCard(card.id);
+    show(`Cartão "${card.name}" reativado.`);
+  }
+
+  async function handleRequestDelete(card: CreditCardType) {
+    setPendingDelete(card);
+  }
+
+  async function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    const result = await deleteCard(pendingDelete.id);
+    if (!result.ok) {
+      setBlockedDelete({ card: pendingDelete, reason: result.reason ?? "Este cartão possui histórico vinculado." });
+    } else {
+      show(`Cartão "${pendingDelete.name}" excluído.`);
+    }
+    setPendingDelete(null);
+  }
+
+  async function handleArchiveInsteadOfDelete() {
+    if (!blockedDelete) return;
+    await archiveCard(blockedDelete.card.id);
+    show(`Cartão "${blockedDelete.card.name}" arquivado.`);
+    setBlockedDelete(null);
   }
 
   return (
@@ -118,7 +161,24 @@ export default function Cards() {
           <EmptyState icon={CreditCard} title="Nenhum cartão cadastrado" description="Adicione seu primeiro cartão para acompanhar faturas e limites." actionLabel="Adicionar cartão" onAction={() => setDrawerOpen(true)} />
         ) : (
           <>
-            <CardCarousel cards={creditCards} selectedId={selectedCard?.id} onSelect={setSelectedCardId} />
+            <CardCarousel
+              cards={creditCards}
+              selectedId={selectedCard?.id}
+              onSelect={setSelectedCardId}
+              onEdit={(card) => {
+                setEditingCard(card);
+                setDrawerOpen(true);
+              }}
+              onViewDetails={(card) => setSelectedCardId(card.id)}
+              onViewInvoices={(card) => setInvoiceHistoryCard(card)}
+              onViewInstallments={(card) => {
+                setSelectedCardId(card.id);
+                document.getElementById("installment-plans-section")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              onArchive={(card) => setPendingArchive(card)}
+              onReactivate={handleReactivate}
+              onDelete={handleRequestDelete}
+            />
 
             {activeInvoice && (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
@@ -183,7 +243,7 @@ export default function Cards() {
               )}
             </div>
 
-            <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
+            <div id="installment-plans-section" className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
               <h2 className="flex items-center gap-2 text-base font-bold text-ink-900">
                 <Repeat size={17} /> Parcelamentos
               </h2>
@@ -200,9 +260,43 @@ export default function Cards() {
             </div>
           </>
         )}
+
+        {archivedCards.length > 0 && (
+          <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
+            <button onClick={() => setShowArchived((v) => !v)} className="flex w-full items-center justify-between text-left">
+              <h2 className="text-base font-bold text-ink-900">Cartões arquivados ({archivedCards.length})</h2>
+              <ChevronDown size={16} className={`text-ink-400 transition-transform ${showArchived ? "rotate-180" : ""}`} />
+            </button>
+            {showArchived && (
+              <ul className="mt-3 divide-y divide-ink-100">
+                {archivedCards.map((card) => (
+                  <li key={card.id} className="flex items-center justify-between py-2.5">
+                    <div>
+                      <p className="text-sm font-medium text-ink-900">{card.name}</p>
+                      <p className="text-xs text-ink-400">•••• {card.lastFourDigits}</p>
+                    </div>
+                    <button
+                      onClick={() => handleReactivate(card)}
+                      className="flex items-center gap-1.5 rounded-lg border border-ink-100 px-2.5 py-1.5 text-xs font-semibold text-ink-600 hover:bg-ink-50"
+                    >
+                      <ArchiveRestore size={13} /> Reativar
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
-      <CardDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <CardDrawer
+        open={drawerOpen}
+        onClose={() => {
+          setDrawerOpen(false);
+          setEditingCard(undefined);
+        }}
+        initial={editingCard}
+      />
 
       <ImportWizard
         open={importOpen}
@@ -225,6 +319,35 @@ export default function Cards() {
         confirmLabel="Reabrir"
         onConfirm={handleReopenInvoice}
         onCancel={() => setPendingReopenInvoiceId(null)}
+      />
+
+      <InvoiceHistoryModal card={invoiceHistoryCard} invoices={invoices} onClose={() => setInvoiceHistoryCard(null)} />
+
+      <ConfirmDialog
+        open={!!pendingArchive}
+        title="Arquivar cartão"
+        message={`O cartão "${pendingArchive?.name}" deixará de aparecer nos seletores de novas compras, mas seu histórico continua disponível. Deseja continuar?`}
+        confirmLabel="Arquivar"
+        onConfirm={handleConfirmArchive}
+        onCancel={() => setPendingArchive(null)}
+      />
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="Excluir cartão"
+        message={`Tem certeza que deseja excluir "${pendingDelete?.name}"? Esta ação não pode ser desfeita.`}
+        confirmLabel="Excluir"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={!!blockedDelete}
+        title="Este cartão possui histórico"
+        message={`${blockedDelete?.reason ?? ""} Prefira arquivar o cartão para preservar o histórico.`}
+        confirmLabel="Arquivar cartão"
+        onConfirm={handleArchiveInsteadOfDelete}
+        onCancel={() => setBlockedDelete(null)}
       />
     </>
   );
