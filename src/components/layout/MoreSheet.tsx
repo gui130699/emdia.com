@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { CreditCard, BarChart3, Settings, History, HelpCircle, X, ChevronRight } from "lucide-react";
+import { CreditCard, BarChart3, Settings, History, ClipboardCheck, HelpCircle, X, ChevronRight } from "lucide-react";
 
 interface MoreSheetProps {
   open: boolean;
@@ -10,6 +10,7 @@ const ITEMS = [
   { label: "Cartões", description: "Faturas e limites", path: "/cartoes", icon: CreditCard },
   { label: "Relatórios", description: "Análises e insights", path: "/relatorios", icon: BarChart3 },
   { label: "Importações", description: "Histórico de arquivos importados", path: "/importacoes", icon: History },
+  { label: "Conciliação", description: "Vincule contas a lançamentos importados", path: "/conciliacao", icon: ClipboardCheck },
   { label: "Ajuda", description: "Como importar seus extratos", path: "/ajuda", icon: HelpCircle },
   { label: "Configurações", description: "Perfil e preferências", path: "/configuracoes", icon: Settings },
 ];

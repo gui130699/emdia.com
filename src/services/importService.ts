@@ -93,6 +93,76 @@ function scoreBillMatch(
   return Math.min(score, 100);
 }
 
+/** Transactions that came from an import but were never linked to anything
+ * (no bill payment, no invoice payment, no transfer) — the pool a bill can
+ * still be matched against outside of the moment-of-import review screen. */
+export function unlinkedImportedExpenses(transactions: Transaction[]): Transaction[] {
+  return transactions.filter(
+    (t) => t.source === "import" && t.type === "expense" && !t.cardId && !t.originType
+  );
+}
+
+export interface BillMatchCandidate {
+  transaction: Transaction;
+  score: number;
+  level: ConfidenceLevel;
+}
+
+/** Re-runs the same scoring used during import, but against transactions
+ * that are already sitting in the ledger — for the post-import "Conciliação
+ * bancária" screen, where a bill's due date only became overdue, or its
+ * payment line, arrived after the file was already imported. */
+export function findBillMatchCandidates(
+  bill: AccountBill,
+  transactions: Transaction[],
+  aliases: ReconciliationAlias[]
+): BillMatchCandidate[] {
+  const alias = aliases.find((a) => a.targetType === "bill" && a.targetId === bill.id);
+  return unlinkedImportedExpenses(transactions)
+    .map((t) => ({
+      transaction: t,
+      score: scoreBillMatch(bill, t.amount, t.normalizedDescription ?? normalizeDescription(t.rawDescription ?? t.description), alias),
+    }))
+    .filter((c) => c.score >= 50)
+    .map((c) => ({ ...c, level: confidenceLevelFor(c.score) }))
+    .sort((a, b) => b.score - a.score);
+}
+
+/** Confirms a candidate match found by findBillMatchCandidates — reuses the
+ * exact same markPaid + alias-learning path the import wizard uses, so a
+ * bill reconciled here behaves identically to one reconciled during import. */
+export async function confirmBillMatch(userId: string, bill: AccountBill, transaction: Transaction): Promise<void> {
+  await accountService.markPaid(userId, bill.id, {
+    paymentMethod: transaction.paymentMethod,
+    paidAt: transaction.date,
+    paidAmount: transaction.amount,
+    paidAccountId: transaction.accountId || undefined,
+    paymentTransactionId: transaction.id,
+  });
+  await transactionService.update(userId, transaction.id, {
+    originType: "bill",
+    originId: bill.id,
+  });
+  await reconciliationAliasService.learn(userId, transaction.rawDescription ?? transaction.description, "bill", bill.id);
+}
+
+/** Undoes a match made by confirmBillMatch. Unlike reopening a payment made
+ * through the "pagar conta" flow (which created the transaction and so
+ * deletes it on undo), this only unlinks a pre-existing imported bank
+ * transaction — deleting it would destroy a real bank statement line
+ * instead of just letting it go back to "unlinked". */
+export async function unlinkBillMatch(userId: string, bill: AccountBill): Promise<void> {
+  if (bill.paymentTransactionId) {
+    const transaction = await transactionService.get(userId, bill.paymentTransactionId);
+    if (transaction && transaction.source === "import") {
+      await transactionService.update(userId, transaction.id, { originType: undefined, originId: undefined });
+    } else if (transaction) {
+      await transactionService.remove(userId, transaction.id);
+    }
+  }
+  await accountService.markUnpaid(userId, bill.id);
+}
+
 const batchStore = createRepository<ImportBatch>("importBatches");
 const mappingStore = createRepository<ImportMapping>("importMappings");
 

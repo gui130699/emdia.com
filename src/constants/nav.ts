@@ -7,6 +7,7 @@ import {
   BarChart3,
   Settings,
   History,
+  ClipboardCheck,
   HelpCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -25,6 +26,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Metas", path: "/metas", icon: Target },
   { label: "Relatórios", path: "/relatorios", icon: BarChart3 },
   { label: "Importações", path: "/importacoes", icon: History },
+  { label: "Conciliação", path: "/conciliacao", icon: ClipboardCheck },
   { label: "Ajuda", path: "/ajuda", icon: HelpCircle },
   { label: "Configurações", path: "/configuracoes", icon: Settings },
 ];

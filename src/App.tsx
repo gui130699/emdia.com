@@ -16,6 +16,7 @@ const Goals = lazy(() => import("./pages/Goals"));
 const Reports = lazy(() => import("./pages/Reports"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const ImportHistory = lazy(() => import("./pages/ImportHistory"));
+const Reconciliation = lazy(() => import("./pages/Reconciliation"));
 const Help = lazy(() => import("./pages/Help"));
 
 function PageFallback() {
@@ -104,6 +105,14 @@ export default function App() {
                 element={
                   <Suspense fallback={<PageFallback />}>
                     <ImportHistory />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/conciliacao"
+                element={
+                  <Suspense fallback={<PageFallback />}>
+                    <Reconciliation />
                   </Suspense>
                 }
               />

@@ -11,6 +11,8 @@ import {
   FileDown,
   ArrowRight,
   Inbox,
+  CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
@@ -44,7 +46,7 @@ export default function Dashboard() {
   const { onOpenMenu } = useLayoutContext();
   const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const { transactions, bills, goals, categories, loading, totalBalance } = useFinanceData();
+  const { transactions, bills, goals, categories, loading, totalBalance, bankAccounts } = useFinanceData();
 
   const [monthsBack, setMonthsBack] = useState(6);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -70,6 +72,15 @@ export default function Dashboard() {
 
   const incomeGrowth = growthPercent(thisMonthTotals.income, lastMonthTotals.income);
   const expenseGrowth = growthPercent(thisMonthTotals.expense, lastMonthTotals.expense);
+
+  const accountsWithDiscrepancy = bankAccounts.filter((a) => a.reconciliationStatus === "discrepancy").length;
+  const accountsConferred = bankAccounts.filter((a) => a.reconciliationStatus === "conferred").length;
+  const conferenceHint =
+    accountsWithDiscrepancy > 0
+      ? `${accountsWithDiscrepancy} conta(s) com diferença encontrada`
+      : accountsConferred > 0
+        ? `${accountsConferred} conta(s) com saldo conferido`
+        : undefined;
 
   const upcomingBills = useMemo(
     () =>
@@ -161,6 +172,16 @@ export default function Dashboard() {
                 {formatPercent(incomeGrowth)} em relação ao mês anterior
               </span>
             )}
+            {conferenceHint && (
+              <span
+                className={`mt-2 flex items-center gap-1 text-xs font-medium ${
+                  accountsWithDiscrepancy > 0 ? "text-warning-200" : "text-brand-200"
+                }`}
+              >
+                {accountsWithDiscrepancy > 0 ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />}
+                {conferenceHint}
+              </span>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -188,7 +209,13 @@ export default function Dashboard() {
         </div>
 
         <div className="hidden gap-4 md:grid md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard icon={Wallet} label="Saldo total" value={formatCurrency(totalBalance)} />
+          <SummaryCard
+            icon={Wallet}
+            label="Saldo total"
+            value={formatCurrency(totalBalance)}
+            hint={conferenceHint}
+            hintClassName={accountsWithDiscrepancy > 0 ? "text-warning-600" : "text-success-600"}
+          />
           <SummaryCard
             icon={TrendingUp}
             iconClassName="bg-success-50 text-success-600"
