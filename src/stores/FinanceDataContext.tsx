@@ -14,6 +14,7 @@ import { cardService, type CreditCardInput } from "../services/cardService";
 import { goalService, type FinancialGoalInput } from "../services/goalService";
 import { categoryService, type CategoryInput } from "../services/categoryService";
 import { bankAccountService } from "../services/bankAccountService";
+import { todayISO } from "../utils/date";
 import type {
   AccountBill,
   BankAccount,
@@ -154,14 +155,39 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setBills(await accountService.list(userId));
       },
       async deleteBill(id) {
+        const bill = bills.find((b) => b.id === id);
+        if (bill?.transactionId) {
+          await transactionService.remove(userId, bill.transactionId);
+          setTransactions(await transactionService.list(userId));
+        }
         await accountService.remove(userId, id);
         setBills(await accountService.list(userId));
       },
       async markBillPaid(id) {
-        await accountService.markPaid(userId, id);
+        const bill = bills.find((b) => b.id === id);
+        if (!bill) return;
+        // Paying a bill is a real expense: record it as a transaction so it
+        // shows up in Despesas do mês, Relatórios and Gastos por categoria.
+        const transaction = await transactionService.create(userId, {
+          type: "expense",
+          description: bill.description,
+          amount: bill.amount,
+          date: todayISO(),
+          categoryId: bill.categoryId,
+          accountId: bill.accountId ?? bankAccounts[0]?.id ?? "",
+          paymentMethod: bill.paymentMethod ?? "boleto",
+          recurring: false,
+        });
+        await accountService.markPaid(userId, id, transaction.id);
         setBills(await accountService.list(userId));
+        setTransactions(await transactionService.list(userId));
       },
       async markBillUnpaid(id) {
+        const bill = bills.find((b) => b.id === id);
+        if (bill?.transactionId) {
+          await transactionService.remove(userId, bill.transactionId);
+          setTransactions(await transactionService.list(userId));
+        }
         await accountService.markUnpaid(userId, id);
         setBills(await accountService.list(userId));
       },

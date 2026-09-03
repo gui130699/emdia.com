@@ -64,6 +64,9 @@ export interface AccountBill {
   accountId?: string;
   notes?: string;
   paidAt?: string;
+  /** Expense transaction created when this bill was marked as paid, so it's
+   * reflected in Despesas/Relatórios/Gastos por categoria. */
+  transactionId?: string;
   createdAt: string;
   updatedAt: string;
 }

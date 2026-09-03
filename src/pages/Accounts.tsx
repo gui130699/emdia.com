@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Plus, CheckCircle2, FileText, Clock, AlertTriangle, Landmark } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Plus, CheckCircle2, FileText, Clock, AlertTriangle, Landmark, ArrowRight } from "lucide-react";
 import Header from "../components/layout/Header";
 import SummaryCard from "../components/ui/SummaryCard";
 import EmptyState from "../components/ui/EmptyState";
@@ -17,6 +18,7 @@ import type { AccountBill } from "../types/finance";
 
 export default function Accounts() {
   const { onOpenMenu } = useLayoutContext();
+  const navigate = useNavigate();
   const { bills, categories, markBillPaid, deleteBill } = useFinanceData();
   const { show } = useToast();
 
@@ -68,14 +70,20 @@ export default function Accounts() {
       <Header
         onOpenMenu={onOpenMenu}
         title="Contas"
-        subtitle="Gerencie contas, vencimentos e pagamentos."
+        subtitle="Gerencie contas a pagar, vencimentos e pagamentos."
         actions={
           <>
             <button onClick={openNew} className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-              <Plus size={16} /> Adicionar conta
+              <Plus size={16} /> Nova conta a pagar
             </button>
             <button onClick={() => setPayModalOpen(true)} className="flex items-center gap-1.5 rounded-lg border border-ink-100 bg-surface px-3.5 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50">
               <CheckCircle2 size={16} /> Pagar conta
+            </button>
+            <button
+              onClick={() => navigate("/configuracoes")}
+              className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-50"
+            >
+              <Landmark size={16} /> Contas bancárias <ArrowRight size={14} />
             </button>
           </>
         }
@@ -93,7 +101,7 @@ export default function Accounts() {
           <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm xl:col-span-2">
             <h2 className="text-base font-bold text-ink-900">Todas as contas</h2>
             {sortedBills.length === 0 ? (
-              <EmptyState icon={Landmark} title="Nenhuma conta cadastrada" actionLabel="Adicionar conta" onAction={openNew} />
+              <EmptyState icon={Landmark} title="Nenhuma conta a pagar cadastrada" actionLabel="Nova conta a pagar" onAction={openNew} />
             ) : (
               <div className="mt-3">
                 <AccountsTable

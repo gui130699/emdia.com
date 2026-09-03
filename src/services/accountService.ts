@@ -49,10 +49,11 @@ export const accountService = {
     return store.update(userId, id, { ...input, updatedAt: new Date().toISOString() });
   },
 
-  async markPaid(userId: string, id: string) {
+  async markPaid(userId: string, id: string, transactionId?: string) {
     return store.update(userId, id, {
       status: "paid",
       paidAt: new Date().toISOString(),
+      transactionId,
       updatedAt: new Date().toISOString(),
     });
   },
@@ -63,6 +64,7 @@ export const accountService = {
     return store.update(userId, id, {
       status: computeStatus(bill.dueDate),
       paidAt: undefined,
+      transactionId: undefined,
       updatedAt: new Date().toISOString(),
     });
   },

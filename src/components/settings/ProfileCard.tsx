@@ -41,8 +41,13 @@ export default function ProfileCard() {
       await updateProfile(auth.currentUser, { displayName: fullName });
       await withTimeout(userProfileService.update(auth.currentUser.uid, { fullName, phone }));
       show("Perfil atualizado com sucesso.");
-    } catch {
-      show("Não foi possível sincronizar com o servidor agora, mas o nome já foi atualizado na sua conta.", "error");
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code === "permission-denied") {
+        show("O nome foi salvo, mas o telefone não pôde ser sincronizado: as regras do Firestore ainda não liberam essa gravação.", "error");
+      } else {
+        show("O nome foi salvo, mas não foi possível sincronizar o telefone agora. Tente novamente em instantes.", "error");
+      }
     } finally {
       setSaving(false);
     }
@@ -54,13 +59,18 @@ export default function ProfileCard() {
     setUploading(true);
     try {
       const photoRef = ref(storage, `avatars/${auth.currentUser.uid}`);
-      await uploadBytes(photoRef, file);
+      await withTimeout(uploadBytes(photoRef, file), 15000);
       const url = await getDownloadURL(photoRef);
       await updateProfile(auth.currentUser, { photoURL: url });
       setPhotoURL(url);
       show("Foto atualizada com sucesso.");
-    } catch {
-      show("Não foi possível enviar a foto.", "error");
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code === "storage/unauthorized") {
+        show("Não foi possível enviar a foto: as regras do Firebase Storage ainda não liberam esse envio.", "error");
+      } else {
+        show("Não foi possível enviar a foto agora. Tente novamente em instantes.", "error");
+      }
     } finally {
       setUploading(false);
     }
