@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, FileText, ShieldCheck, HelpCircle, Upload, Landmark } from "lucide-react";
+import { ChevronDown, FileText, ShieldCheck, HelpCircle, Upload, Landmark, Wallet, CreditCard } from "lucide-react";
 import Header from "../components/layout/Header";
 import SearchInput from "../components/ui/SearchInput";
 import BankLogo from "../components/institutions/BankLogo";
+import ImportWizard from "../components/imports/ImportWizard";
 import { useLayoutContext } from "../hooks/useLayoutContext";
-import { BANK_GUIDES, FAQ_ITEMS, GENERIC_EXPORT_STEPS } from "../constants/helpContent";
+import { BANK_HELP_GUIDES, FAQ_ITEMS, type ProductHelpGuide } from "../constants/helpContent";
 import { normalizeDescription } from "../utils/normalizeDescription";
 
 const TABS = [
@@ -17,17 +18,38 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]["key"];
 
+function ProductGuide({ guide }: { guide: ProductHelpGuide }) {
+  return (
+    <div className="mt-3 space-y-2">
+      <ol className="space-y-1.5 text-xs text-ink-600">
+        {guide.steps.map((step, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="font-semibold text-brand-600">{i + 1}.</span>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="text-xs text-ink-400">
+        Formatos compatíveis: {guide.formats.join(" ou ")} ({guide.recommendedFormat} recomendado).
+      </p>
+      {guide.notes && <p className="text-xs text-ink-300">{guide.notes}</p>}
+    </div>
+  );
+}
+
 export default function Help() {
   const { onOpenMenu } = useLayoutContext();
   const [tab, setTab] = useState<TabKey>("banks");
   const [search, setSearch] = useState("");
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [openBank, setOpenBank] = useState<string | null>(null);
+  const [openProduct, setOpenProduct] = useState<"bankAccount" | "creditCard" | null>(null);
+  const [importMode, setImportMode] = useState<"account" | "card" | null>(null);
 
   const filteredBanks = useMemo(() => {
     const q = normalizeDescription(search);
-    if (!q) return BANK_GUIDES;
-    return BANK_GUIDES.filter((b) => normalizeDescription(b.name).includes(q));
+    if (!q) return BANK_HELP_GUIDES;
+    return BANK_HELP_GUIDES.filter((b) => normalizeDescription(b.institutionName).includes(q));
   }, [search]);
 
   const filteredFaq = useMemo(() => {
@@ -62,34 +84,63 @@ export default function Help() {
         {tab === "banks" && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {filteredBanks.map((bank) => {
-              const isOpen = openBank === bank.name;
+              const isOpen = openBank === bank.institutionName;
               return (
-                <div key={bank.name} className="rounded-2xl border border-ink-100 bg-surface p-4 shadow-sm">
+                <div key={bank.institutionName} className="rounded-2xl border border-ink-100 bg-surface p-4 shadow-sm">
                   <button
-                    onClick={() => setOpenBank(isOpen ? null : bank.name)}
+                    onClick={() => {
+                      setOpenBank(isOpen ? null : bank.institutionName);
+                      setOpenProduct(null);
+                    }}
                     className="flex w-full items-center gap-3 text-left"
                   >
-                    <BankLogo name={bank.name} code={bank.code} size={36} />
+                    <BankLogo name={bank.institutionName} code={bank.institutionCode} size={36} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-ink-900">{bank.name}</p>
-                      <p className="truncate text-xs text-ink-400">{bank.channels.join(" · ")}</p>
+                      <p className="truncate text-sm font-semibold text-ink-900">{bank.institutionName}</p>
+                      <p className="truncate text-xs text-ink-400">{bank.products.bankAccount.channels.join(" · ")}</p>
                     </div>
                     <ChevronDown size={16} className={`shrink-0 text-ink-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
                   </button>
 
                   {isOpen && (
                     <div className="mt-3 space-y-2 border-t border-ink-100 pt-3">
-                      <ol className="space-y-1.5 text-xs text-ink-600">
-                        {GENERIC_EXPORT_STEPS.map((step, i) => (
-                          <li key={i} className="flex gap-2">
-                            <span className="font-semibold text-brand-600">{i + 1}.</span>
-                            <span>{step}</span>
-                          </li>
-                        ))}
-                      </ol>
-                      <p className="text-xs text-ink-400">
-                        Formatos compatíveis: OFX (recomendado) e CSV.
-                      </p>
+                      <button
+                        onClick={() => setOpenProduct(openProduct === "bankAccount" ? null : "bankAccount")}
+                        className="flex w-full items-center justify-between rounded-lg bg-ink-50 px-3 py-2 text-left text-sm font-semibold text-ink-900"
+                      >
+                        <span className="flex items-center gap-2"><Wallet size={15} /> Extrato da conta</span>
+                        <ChevronDown size={14} className={`transition-transform ${openProduct === "bankAccount" ? "rotate-180" : ""}`} />
+                      </button>
+                      {openProduct === "bankAccount" && (
+                        <>
+                          <ProductGuide guide={bank.products.bankAccount} />
+                          <button
+                            onClick={() => setImportMode("account")}
+                            className="w-full rounded-lg bg-brand-600 py-2 text-xs font-semibold text-white hover:bg-brand-700"
+                          >
+                            Importar extrato agora
+                          </button>
+                        </>
+                      )}
+
+                      <button
+                        onClick={() => setOpenProduct(openProduct === "creditCard" ? null : "creditCard")}
+                        className="flex w-full items-center justify-between rounded-lg bg-ink-50 px-3 py-2 text-left text-sm font-semibold text-ink-900"
+                      >
+                        <span className="flex items-center gap-2"><CreditCard size={15} /> Fatura do cartão</span>
+                        <ChevronDown size={14} className={`transition-transform ${openProduct === "creditCard" ? "rotate-180" : ""}`} />
+                      </button>
+                      {openProduct === "creditCard" && (
+                        <>
+                          <ProductGuide guide={bank.products.creditCard} />
+                          <button
+                            onClick={() => setImportMode("card")}
+                            className="w-full rounded-lg bg-brand-600 py-2 text-xs font-semibold text-white hover:bg-brand-700"
+                          >
+                            Importar fatura agora
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -107,7 +158,7 @@ export default function Help() {
               <h3 className="text-sm font-bold text-ink-900">OFX (recomendado)</h3>
               <p className="mt-1 text-sm text-ink-600">
                 Formato estruturado usado por praticamente todos os bancos e cartões brasileiros. O EM DIA identifica
-                automaticamente o banco, a conta e cada movimentação a partir dele, com menos chance de erro.
+                automaticamente o banco, a conta (ou cartão) e cada movimentação a partir dele, com menos chance de erro.
               </p>
             </div>
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
@@ -119,9 +170,17 @@ export default function Help() {
               </p>
             </div>
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
-              <h3 className="text-sm font-bold text-ink-900">PDF</h3>
+              <h3 className="text-sm font-bold text-ink-900">QIF</h3>
               <p className="mt-1 text-sm text-ink-600">
-                Ainda não é compatível com a importação automática nesta versão. Use OFX ou CSV sempre que possível.
+                Formato mais antigo (Quicken), ainda oferecido por alguns bancos e softwares financeiros. Suportado
+                para o caso mais comum (data, valor e descrição).
+              </p>
+            </div>
+            <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
+              <h3 className="text-sm font-bold text-ink-900">XLS/XLSX e PDF</h3>
+              <p className="mt-1 text-sm text-ink-600">
+                Ainda não são compatíveis com a importação automática nesta versão. Se seu banco só oferecer planilha,
+                abra o arquivo e exporte/salve como CSV antes de importar.
               </p>
             </div>
           </div>
@@ -151,17 +210,17 @@ export default function Help() {
               <h3 className="text-sm font-bold text-ink-900">Como funciona a importação</h3>
               <ol className="mt-2 space-y-2 text-sm text-ink-600">
                 <li>1. Em Transações, clique em "Importar extrato" (ou em Cartões, "Importar fatura") e escolha o arquivo.</li>
-                <li>2. O EM DIA lê o arquivo no seu próprio dispositivo e mostra uma prévia com cada lançamento.</li>
-                <li>3. Lançamentos já existentes aparecem como "Já importada" e ficam desmarcados automaticamente.</li>
+                <li>2. O EM DIA lê o arquivo no seu próprio dispositivo. Para OFX, identifica o banco e a conta/cartão automaticamente.</li>
+                <li>3. Lançamentos já existentes aparecem como "Já importada"; pagamentos, estornos e encargos de fatura são identificados e sinalizados para revisão.</li>
                 <li>4. Ajuste a categoria de cada item se quiser, confirme e pronto — nada é enviado para fora do seu aparelho antes disso.</li>
               </ol>
             </div>
             <div className="rounded-2xl border border-ink-100 bg-surface p-5 shadow-sm">
-              <h3 className="text-sm font-bold text-ink-900">Categorização automática</h3>
+              <h3 className="text-sm font-bold text-ink-900">Categorização e conciliação automática</h3>
               <p className="mt-1 text-sm text-ink-600">
                 O EM DIA reconhece padrões comuns (como nomes de aplicativos de transporte ou supermercados) para
-                sugerir categorias. Quando você corrige uma categoria manualmente, pode ensinar o EM DIA a usar essa
-                categoria automaticamente da próxima vez.
+                sugerir categorias, e aprende a associação entre uma descrição bancária e uma conta a pagar sempre que
+                você confirma um vínculo — da próxima vez, a sugestão vem com mais confiança.
               </p>
             </div>
           </div>
@@ -183,6 +242,9 @@ export default function Help() {
           </div>
         )}
       </div>
+
+      <ImportWizard open={importMode === "account"} onClose={() => setImportMode(null)} mode="account" />
+      <ImportWizard open={importMode === "card"} onClose={() => setImportMode(null)} mode="card" />
     </>
   );
 }
