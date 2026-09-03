@@ -40,6 +40,7 @@ const SYNCED_ENTITIES = [
   "importMappings",
   "categorizationRules",
   "balanceSnapshots",
+  "userProfile",
 ] as const;
 
 export async function enqueueSync(

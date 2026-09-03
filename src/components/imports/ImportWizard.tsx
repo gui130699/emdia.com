@@ -685,7 +685,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
                               <p className="text-xs text-ink-400">{formatDate(row.date)}</p>
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
-                              <span className={`text-sm font-semibold ${row.type === "income" ? "text-brand-700" : "text-danger-600"}`}>
+                              <span className={`text-sm font-semibold ${row.type === "income" ? "text-success-700" : "text-danger-600"}`}>
                                 {row.type === "income" ? "+" : "-"} {formatCurrency(row.amount)}
                               </span>
                               <Badge label={badge.label} tone={badge.tone} />
@@ -735,7 +735,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
           {step === "reconciliation" && reconciliation && (
             <div className="space-y-4">
               {reconciliation.status === "conferred" ? (
-                <div className="flex items-center gap-2 rounded-lg bg-brand-50 px-4 py-3 text-sm font-semibold text-brand-700">
+                <div className="flex items-center gap-2 rounded-lg bg-success-50 px-4 py-3 text-sm font-semibold text-success-700">
                   <CheckCircle2 size={18} /> Saldo conferido
                 </div>
               ) : (

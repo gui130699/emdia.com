@@ -255,7 +255,7 @@ export default function Transactions() {
         </div>
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <SummaryCard icon={ArrowUpCircle} iconClassName="bg-brand-50 text-brand-600" label="Entradas" value={formatCurrency(totals.income)} />
+          <SummaryCard icon={ArrowUpCircle} iconClassName="bg-success-50 text-success-600" label="Entradas" value={formatCurrency(totals.income)} />
           <SummaryCard icon={ArrowDownCircle} iconClassName="bg-danger-500/10 text-danger-600" label="Saídas" value={formatCurrency(totals.expense)} />
           <SummaryCard
             icon={Wallet2}

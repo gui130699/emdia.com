@@ -5,7 +5,7 @@ import { formatDate } from "../../utils/date";
 import Badge from "../ui/Badge";
 
 function amountClass(t: Transaction) {
-  if (t.type === "income") return "text-brand-600";
+  if (t.type === "income") return "text-success-600";
   if (t.type === "expense") return "text-danger-600";
   return "text-ink-700";
 }

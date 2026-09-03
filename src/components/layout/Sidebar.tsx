@@ -10,15 +10,15 @@ interface SidebarProps {
 
 function SidebarContent() {
   return (
-    <div className="flex h-full flex-col px-4 py-6 text-ink-50">
-      <div className="flex items-center gap-2 px-2">
+    <div className="flex h-full min-h-0 flex-col px-4 py-6 text-ink-50">
+      <div className="flex shrink-0 items-center gap-2 px-2">
         <span className="text-brand-400">
           <CheckBadgeIcon size={30} />
         </span>
         <span className="text-lg font-extrabold tracking-wide text-white">EM DIA</span>
       </div>
 
-      <nav className="mt-8 flex flex-1 flex-col gap-1" aria-label="Navegação principal">
+      <nav className="mt-8 flex-1 space-y-1 overflow-y-auto" aria-label="Navegação principal">
         {NAV_ITEMS.map((item) => (
           <NavLink
             key={item.path}
@@ -37,7 +37,7 @@ function SidebarContent() {
         ))}
       </nav>
 
-      <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="mt-6 shrink-0 rounded-2xl border border-white/10 bg-white/5 p-4">
         <p className="text-sm leading-snug text-white/80">
           Organize suas finanças com mais clareza e segurança.
         </p>
@@ -52,7 +52,7 @@ function SidebarContent() {
 export default function Sidebar({ open, onClose }: SidebarProps) {
   return (
     <>
-      <aside className="hidden lg:flex lg:w-64 lg:flex-shrink-0 lg:flex-col bg-gradient-to-b from-petrol-800 via-petrol-900 to-brand-900">
+      <aside className="sticky top-0 hidden h-dvh lg:flex lg:w-64 lg:flex-shrink-0 lg:flex-col bg-gradient-to-b from-petrol-800 via-petrol-900 to-brand-900">
         <SidebarContent />
       </aside>
 

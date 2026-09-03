@@ -24,6 +24,17 @@
   --color-petrol-800: #08302f;
   --color-petrol-900: #06211f;
 
+  /* Fixed "positive money" color — receitas, "conferido", success badges.
+     Deliberately NOT tied to --color-brand-*: the accent color picker
+     changes brand (buttons, active nav, focus rings), but income must
+     always read as green regardless of the chosen accent, or it becomes
+     visually indistinguishable from despesas when accent = red. */
+  --color-success-50: #ecfdf5;
+  --color-success-100: #d1fae5;
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-success-700: #047a54;
+
   --color-danger-500: #ef4444;
   --color-danger-600: #dc2626;
   --color-danger-700: #b91c1c;

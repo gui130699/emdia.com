@@ -7,6 +7,7 @@ import { auth, storage } from "../../firebase";
 import { userProfileService } from "../../services/userProfileService";
 import { useToast } from "../../stores/ToastContext";
 import { withTimeout } from "../../utils/withTimeout";
+import { normalizePhone, formatPhoneDisplay } from "../../utils/phone";
 import Avatar from "../layout/Avatar";
 import SettingsCard from "./SettingsCard";
 import FormField from "../ui/FormField";
@@ -25,12 +26,15 @@ export default function ProfileCard() {
 
   useEffect(() => {
     if (!currentUser) return;
-    withTimeout(userProfileService.get(currentUser.uid))
+    userProfileService
+      .get(currentUser.uid)
       .then((profile) => {
-        if (profile?.phone) setPhone(profile.phone);
+        if (profile?.fullName) setFullName(profile.fullName);
+        if (profile?.phone) setPhone(formatPhoneDisplay(profile.phone));
+        if (profile?.photoURL) setPhotoURL(profile.photoURL);
       })
       .catch(() => {
-        /* profile doc may not exist/be reachable yet — fields just stay empty */
+        /* profile row may not exist/be reachable yet — fields just stay empty */
       });
   }, [currentUser]);
 
@@ -38,16 +42,20 @@ export default function ProfileCard() {
     if (!auth.currentUser) return;
     setSaving(true);
     try {
-      await updateProfile(auth.currentUser, { displayName: fullName });
-      await withTimeout(userProfileService.update(auth.currentUser.uid, { fullName, phone }));
-      show("Perfil atualizado com sucesso.");
-    } catch (err) {
-      const code = (err as { code?: string })?.code;
-      if (code === "permission-denied") {
-        show("O nome foi salvo, mas o telefone não pôde ser sincronizado: as regras do Firestore ainda não liberam essa gravação.", "error");
-      } else {
-        show("O nome foi salvo, mas não foi possível sincronizar o telefone agora. Tente novamente em instantes.", "error");
-      }
+      await userProfileService.update(auth.currentUser.uid, {
+        fullName,
+        phone: phone ? normalizePhone(phone) : undefined,
+        email: auth.currentUser.email ?? "",
+      });
+
+      // Auth's displayName is a separate, less critical mirror used by some
+      // Firebase-driven UI — its failure shouldn't block or mislabel the
+      // profile save above, which already succeeded.
+      updateProfile(auth.currentUser, { displayName: fullName }).catch(() => undefined);
+
+      show(navigator.onLine ? "Perfil atualizado com sucesso." : "Alterações salvas neste dispositivo. A sincronização será feita quando você estiver online.");
+    } catch {
+      show("Não foi possível salvar as alterações.", "error");
     } finally {
       setSaving(false);
     }
@@ -105,7 +113,14 @@ export default function ProfileCard() {
           <input id="profile-email" className={`${inputClass} bg-ink-50 text-ink-400`} value={currentUser?.email ?? ""} disabled />
         </FormField>
         <FormField label="Telefone" htmlFor="profile-phone">
-          <input id="profile-phone" className={inputClass} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(11) 91234-5678" />
+          <input
+            id="profile-phone"
+            className={inputClass}
+            value={phone}
+            onChange={(e) => setPhone(formatPhoneDisplay(e.target.value))}
+            placeholder="(11) 91234-5678"
+            inputMode="tel"
+          />
         </FormField>
       </div>
 

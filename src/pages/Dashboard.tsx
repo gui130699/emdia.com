@@ -167,7 +167,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 gap-3">
             <SummaryCard
               icon={TrendingUp}
-              iconClassName="bg-brand-50 text-brand-600"
+              iconClassName="bg-success-50 text-success-600"
               label="Receitas do mês"
               value={formatCurrency(thisMonthTotals.income)}
             />
@@ -192,11 +192,11 @@ export default function Dashboard() {
           <SummaryCard icon={Wallet} label="Saldo total" value={formatCurrency(totalBalance)} />
           <SummaryCard
             icon={TrendingUp}
-            iconClassName="bg-brand-50 text-brand-600"
+            iconClassName="bg-success-50 text-success-600"
             label="Receitas do mês"
             value={formatCurrency(thisMonthTotals.income)}
             hint={lastMonthTotals.income > 0 ? `${formatPercent(incomeGrowth)} em relação ao mês anterior` : undefined}
-            hintClassName={incomeGrowth >= 0 ? "text-brand-600" : "text-danger-600"}
+            hintClassName={incomeGrowth >= 0 ? "text-success-600" : "text-danger-600"}
           />
           <SummaryCard
             icon={TrendingDown}
@@ -204,7 +204,7 @@ export default function Dashboard() {
             label="Despesas do mês"
             value={formatCurrency(thisMonthTotals.expense)}
             hint={lastMonthTotals.expense > 0 ? `${formatPercent(expenseGrowth)} em relação ao mês anterior` : undefined}
-            hintClassName={expenseGrowth <= 0 ? "text-brand-600" : "text-danger-600"}
+            hintClassName={expenseGrowth <= 0 ? "text-success-600" : "text-danger-600"}
           />
           <SummaryCard
             icon={CalendarClock}
@@ -292,7 +292,7 @@ export default function Dashboard() {
                 {recentTransactions.map((t) => (
                   <li key={t.id} className="flex items-center justify-between py-2.5">
                     <p className="text-sm font-medium text-ink-900">{t.description}</p>
-                    <span className={`text-sm font-semibold ${t.type === "income" ? "text-brand-600" : "text-danger-600"}`}>
+                    <span className={`text-sm font-semibold ${t.type === "income" ? "text-success-600" : "text-danger-600"}`}>
                       {t.type === "income" ? "+ " : "- "}
                       {formatCurrency(t.amount)}
                     </span>

@@ -2,6 +2,7 @@ import { Palette, Sun, Moon, Monitor } from "lucide-react";
 import { useSettings } from "../../stores/SettingsContext";
 import SettingsCard from "./SettingsCard";
 import { inputClass } from "../ui/formStyles";
+import { ACCENT_OPTIONS } from "../../constants/accentPalettes";
 import type { ThemePreference } from "../../types/finance";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
@@ -9,8 +10,6 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof Sun }
   { value: "dark", label: "Escuro", icon: Moon },
   { value: "system", label: "Sistema", icon: Monitor },
 ];
-
-const ACCENT_COLORS = ["#059669", "#2563eb", "#7c3aed", "#f59e0b", "#dc2626", "#0f6466"];
 
 export default function AppearanceCard() {
   const { settings, updateAppearance } = useSettings();
@@ -39,15 +38,16 @@ export default function AppearanceCard() {
       <div className="mt-5">
         <p className="mb-2 text-sm font-medium text-ink-700">Cor principal</p>
         <div className="flex gap-2">
-          {ACCENT_COLORS.map((color) => (
+          {ACCENT_OPTIONS.map((option) => (
             <button
-              key={color}
-              aria-label={`Cor ${color}`}
-              onClick={() => updateAppearance({ accentColor: color })}
+              key={option.id}
+              aria-label={option.label}
+              title={option.label}
+              onClick={() => updateAppearance({ accentColor: option.swatch })}
               className="flex h-8 w-8 items-center justify-center rounded-full"
-              style={{ backgroundColor: color }}
+              style={{ backgroundColor: option.swatch }}
             >
-              {appearance.accentColor === color && <span className="h-2.5 w-2.5 rounded-full bg-white" />}
+              {appearance.accentColor === option.swatch && <span className="h-2.5 w-2.5 rounded-full bg-white" />}
             </button>
           ))}
         </div>

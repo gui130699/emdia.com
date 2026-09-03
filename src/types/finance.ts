@@ -311,6 +311,23 @@ export interface UserSettings {
   appearance: AppearancePreferences;
 }
 
+/** Actual user data (as opposed to UserSettings, which is app preferences) —
+ * synced across devices like every other entity, never localStorage-only. */
+export interface UserProfile {
+  id: "current";
+  fullName: string;
+  /** Mirrors Firebase Auth's email for display — not editable here; email
+   * changes go through Auth's own security flow, not this form. */
+  email: string;
+  /** Contact phone number, stored normalized (+55DDNNNNNNNNN). This is a
+   * contact detail, not Firebase Phone Auth — never written to
+   * auth.currentUser.phoneNumber. */
+  phone?: string;
+  photoURL?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Import pipeline
 // ---------------------------------------------------------------------------

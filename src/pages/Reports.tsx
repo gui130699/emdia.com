@@ -142,7 +142,7 @@ export default function Reports() {
         <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           <SummaryCard
             icon={TrendingUp}
-            iconClassName="bg-brand-50 text-brand-600"
+            iconClassName="bg-success-50 text-success-600"
             label="Receitas acumuladas"
             value={formatCurrency(currentTotals.income)}
             hint={`${formatPercent(growthPercent(currentTotals.income, previousTotals.income))} em relação ao período anterior`}

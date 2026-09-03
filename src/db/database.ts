@@ -13,6 +13,7 @@ import type {
   InstallmentPlan,
   Invoice,
   Transaction,
+  UserProfile,
   UserSettings,
 } from "../types/finance";
 
@@ -56,6 +57,7 @@ export class EmDiaDatabase extends Dexie {
   importMappings!: Table<ImportMapping, string>;
   categorizationRules!: Table<CategorizationRule, string>;
   balanceSnapshots!: Table<BalanceSnapshot, string>;
+  userProfile!: Table<UserProfile, string>;
   syncQueue!: Table<SyncQueueItem, string>;
 
   constructor(userId: string) {
@@ -78,6 +80,9 @@ export class EmDiaDatabase extends Dexie {
     });
     this.version(2).stores({
       balanceSnapshots: "id, accountId, asOfDate, importBatchId",
+    });
+    this.version(3).stores({
+      userProfile: "id",
     });
   }
 }

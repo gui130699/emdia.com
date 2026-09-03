@@ -102,7 +102,7 @@ export default function BankAccountsCard() {
                     {account.reconciliationStatus && account.reconciliationStatus !== "unreconciled" && (
                       <p
                         className={`mt-0.5 flex items-center gap-1 text-xs ${
-                          account.reconciliationStatus === "conferred" ? "text-brand-600" : "text-warning-600"
+                          account.reconciliationStatus === "conferred" ? "text-success-600" : "text-warning-600"
                         }`}
                       >
                         {account.reconciliationStatus === "conferred" ? (

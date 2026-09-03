@@ -4,7 +4,7 @@ interface BadgeProps {
 }
 
 const TONES: Record<BadgeProps["tone"], string> = {
-  success: "bg-brand-50 text-brand-700",
+  success: "bg-success-50 text-success-700",
   warning: "bg-warning-500/10 text-warning-700",
   danger: "bg-danger-500/10 text-danger-700",
   neutral: "bg-ink-100 text-ink-600",

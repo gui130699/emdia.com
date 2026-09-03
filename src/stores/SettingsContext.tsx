@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { settingsService, DEFAULT_SETTINGS } from "../services/settingsService";
+import { applyAccentPalette } from "../constants/accentPalettes";
 import type { AppearancePreferences, NotificationPreferences, UserSettings } from "../types/finance";
 
 interface SettingsValue {
@@ -51,7 +52,7 @@ function applyDensity(density: AppearancePreferences["density"]) {
 }
 
 function applyAccent(color: string) {
-  document.documentElement.style.setProperty("--accent", color);
+  applyAccentPalette(color);
 }
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
