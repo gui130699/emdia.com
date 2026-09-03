@@ -12,17 +12,20 @@ import { formatDate, todayISO } from "../../utils/date";
 import {
   buildCsvPreview,
   buildOfxPreview,
+  buildQifPreview,
   detectCsvColumnSignature,
   findInstitutionByOfxBankId,
   guessCsvMapping,
   parseCsvFile,
   parseOfxFile,
+  parseQifFile,
   importService,
   type CsvColumnMapping,
   type ImportPreview,
   type ImportPreviewRow,
 } from "../../services/importService";
 import type { ParsedOfx } from "../../utils/ofxParser";
+import type { ParsedQif } from "../../utils/qifParser";
 import type { BankAccountKind, ImportRecordStatus } from "../../types/finance";
 
 interface ImportWizardProps {
@@ -89,6 +92,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [rows, setRows] = useState<ImportPreviewRow[]>([]);
   const [lastOfx, setLastOfx] = useState<ParsedOfx | null>(null);
+  const [lastQif, setLastQif] = useState<ParsedQif | null>(null);
   const [committedBatchId, setCommittedBatchId] = useState<string | null>(null);
   const [reconciliation, setReconciliation] = useState<{ calculated: number; reported: number; difference: number; status: "conferred" | "discrepancy" } | null>(null);
   const [correctedBalance, setCorrectedBalance] = useState(0);
@@ -124,6 +128,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     setPreview(null);
     setRows([]);
     setLastOfx(null);
+    setLastQif(null);
     setCommittedBatchId(null);
     setReconciliation(null);
     setDetectedCode(undefined);
@@ -228,6 +233,22 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
     try {
       const text = await file.text();
       const isOfx = /\.ofx$/i.test(file.name);
+      const isQif = /\.qif$/i.test(file.name);
+
+      if (isQif) {
+        setLoadingLabel("Analisando arquivo...");
+        const qif = parseQifFile(text);
+        setLastQif(qif);
+        setLoadingLabel("");
+        if (mode === "account" && !fixedAccountId && !targetAccountId) {
+          setStep("choose-account");
+        } else if (mode === "card" && !fixedCardId && !targetCardId) {
+          setStep("choose-card");
+        } else {
+          await runQifPreview(mode === "card" ? { cardId: targetCardId || fixedCardId } : { accountId: targetAccountId || fixedAccountId });
+        }
+        return;
+      }
 
       if (!isOfx) {
         await handleCsvFile(text);
@@ -254,6 +275,17 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
   function confirmProductAnyway() {
     if (lastOfx) proceedWithOfx(lastOfx);
+  }
+
+  async function runQifPreview(resolvedTarget: { accountId?: string; cardId?: string }) {
+    if (!lastQif) return;
+    setLoadingLabel("Verificando duplicidades...");
+    const ctx = buildCtx(resolvedTarget);
+    const result = await buildQifPreview(ctx, fileName, lastQif);
+    setPreview(result);
+    setRows(result.rows);
+    setLoadingLabel("");
+    setStep("preview");
   }
 
   async function handleCsvFile(text: string) {
@@ -293,6 +325,10 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
   async function confirmChooseAccount() {
     if (!targetAccountId) return;
+    if (lastQif) {
+      await runQifPreview({ accountId: targetAccountId });
+      return;
+    }
     if (csvHeaders.length > 0) {
       const guess = guessCsvMapping(csvHeaders);
       if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
@@ -306,6 +342,10 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
   async function confirmChooseCard() {
     if (!targetCardId) return;
+    if (lastQif) {
+      await runQifPreview({ cardId: targetCardId });
+      return;
+    }
     if (csvHeaders.length > 0) {
       const guess = guessCsvMapping(csvHeaders);
       if (guess.dateColumn && guess.descriptionColumn && (guess.amountColumn || guess.creditColumn || guess.debitColumn)) {
@@ -509,11 +549,11 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
 
               <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 px-6 py-12 text-center hover:border-brand-400 hover:bg-brand-50/40">
                 <Upload size={28} className="text-brand-600" />
-                <span className="text-sm font-semibold text-ink-900">Selecione um arquivo OFX ou CSV</span>
+                <span className="text-sm font-semibold text-ink-900">Selecione um arquivo OFX, CSV ou QIF</span>
                 <span className="text-xs text-ink-400">Seus arquivos são processados localmente, no seu dispositivo.</span>
                 <input
                   type="file"
-                  accept=".ofx,.csv,text/csv,application/x-ofx"
+                  accept=".ofx,.csv,.qif,text/csv,application/x-ofx"
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
@@ -527,7 +567,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
           {step === "choose-account" && (
             <div className="space-y-4">
               <p className="text-sm text-ink-600">
-                Este arquivo CSV não traz identificação do banco. Selecione a qual conta financeira ele pertence.
+                Este arquivo não traz identificação do banco. Selecione a qual conta financeira ele pertence.
               </p>
               {bankAccounts.length === 0 ? (
                 <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-sm text-warning-700">
@@ -556,7 +596,7 @@ export default function ImportWizard({ open, onClose, mode, fixedAccountId, fixe
           {step === "choose-card" && (
             <div className="space-y-4">
               <p className="text-sm text-ink-600">
-                Este arquivo CSV não traz identificação do cartão. Selecione a qual cartão ele pertence.
+                Este arquivo não traz identificação do cartão. Selecione a qual cartão ele pertence.
               </p>
               {creditCards.length === 0 ? (
                 <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-sm text-warning-700">

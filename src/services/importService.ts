@@ -10,6 +10,7 @@ import { normalizeDescription } from "../utils/normalizeDescription";
 import { fingerprint } from "../utils/fingerprint";
 import { parseOfx, type ParsedOfx } from "../utils/ofxParser";
 import { parseCsv, parseCsvAmount, parseCsvDate } from "../utils/csvParser";
+import { parseQif, type ParsedQif } from "../utils/qifParser";
 import { getCurrentInvoicePeriod, invoiceTotalForPeriod, type InvoicePeriod } from "../utils/cardInvoice";
 import { FALLBACK_INSTITUTIONS } from "../constants/institutions";
 import type {
@@ -302,6 +303,24 @@ export function parseOfxFile(text: string): ParsedOfx {
   return parseOfx(text);
 }
 
+export function parseQifFile(text: string): ParsedQif {
+  return parseQif(text);
+}
+
+export function qifToRawRows(qif: ParsedQif): RawImportRow[] {
+  return qif.transactions.map((t) => {
+    const isCredit = t.amount >= 0;
+    const description = t.payee || t.memo || "Movimentação";
+    return {
+      date: t.date,
+      description,
+      amount: Math.abs(t.amount),
+      type: isCredit ? "income" : "expense",
+      isCreditEntry: isCredit,
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Classification: dedup, category suggestion, bill/transfer linking
 // ---------------------------------------------------------------------------
@@ -553,6 +572,19 @@ export async function buildCsvPreview(
   return {
     fileName,
     fileType: "csv",
+    periodStart: dates[0],
+    periodEnd: dates[dates.length - 1],
+    rows,
+  };
+}
+
+export async function buildQifPreview(ctx: ImportContext, fileName: string, qif: ParsedQif): Promise<ImportPreview> {
+  const rawRows = qifToRawRows(qif);
+  const rows = await classifyRows(ctx, "qif", rawRows);
+  const dates = rawRows.map((r) => r.date).sort();
+  return {
+    fileName,
+    fileType: "qif",
     periodStart: dates[0],
     periodEnd: dates[dates.length - 1],
     rows,
