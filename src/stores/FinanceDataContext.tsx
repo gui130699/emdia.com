@@ -309,7 +309,14 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         ]);
         const priorSnapshots = await balanceSnapshotService.listForAccount(userId, accountId);
         const relevantTransactions = freshTransactions.filter((t) => t.date <= asOfDate);
-        const calculated = freshAccount ? computeAccountBalance(freshAccount, relevantTransactions, priorSnapshots) : reportedBalance;
+        // Restricted to snapshots at-or-before asOfDate: comparing a
+        // historical file's balance against a "calculated" figure that
+        // silently used a *later*-dated snapshot as its base (e.g.
+        // reconciling an old statement after a more recent one was already
+        // recorded) would compare against the wrong baseline entirely.
+        const calculated = freshAccount
+          ? computeAccountBalance(freshAccount, relevantTransactions, priorSnapshots, asOfDate)
+          : reportedBalance;
         const difference = Math.round((reportedBalance - calculated) * 100) / 100;
         // With no prior snapshot at all, "calculated" is just initialBalance
         // (0 for a fresh account) plus whatever transactions this same
@@ -317,8 +324,17 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         // balance is comparing against a baseline that was never
         // established, not a real discrepancy. The bank's number becomes
         // the new reference point instead of a false warning.
-        const status: "conferred" | "discrepancy" | "initial_reference" =
-          priorSnapshots.length === 0 ? "initial_reference" : Math.abs(difference) < 0.01 ? "conferred" : "discrepancy";
+        const hasEarlierSnapshot = priorSnapshots.some((s) => s.asOfDate <= asOfDate);
+        // A manual entry is the user directly asserting "this is the real
+        // balance" — there's nothing to check it against; flagging it as
+        // its own "discrepancy" (which happens if it doesn't match a
+        // calculation based on whatever was previously on record, possibly
+        // itself wrong) would defeat the purpose of a manual correction.
+        const status: "conferred" | "discrepancy" | "initial_reference" = !hasEarlierSnapshot
+          ? "initial_reference"
+          : source === "manual" || Math.abs(difference) < 0.01
+            ? "conferred"
+            : "discrepancy";
 
         await balanceSnapshotService.create(userId, { accountId, balance: reportedBalance, asOfDate, source, importBatchId });
         setBalanceSnapshots(await balanceSnapshotService.list(userId));

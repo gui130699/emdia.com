@@ -29,13 +29,30 @@ function movesAccount(t: Transaction, accountId: string, sinceDate?: string): nu
 export function computeAccountBalance(
   account: BankAccount,
   transactions: Transaction[],
-  snapshots: BalanceSnapshot[] = []
+  snapshots: BalanceSnapshot[] = [],
+  /** Restricts which snapshot counts as "latest" to ones dated at or before
+   * this cutoff — needed when computing what the balance *should have been*
+   * on a past date (reconciling an older file after a more recent snapshot
+   * already exists). Without this, a snapshot dated after the cutoff could
+   * be picked as the base, excluding every transaction up to the cutoff
+   * from the count and making the historical comparison meaningless.
+   * Omitted entirely for the normal "current balance right now" case. */
+  asOfCutoff?: string
 ): number {
-  const accountSnapshots = snapshots.filter((s) => s.accountId === account.id);
-  const latest = accountSnapshots.reduce<BalanceSnapshot | undefined>(
-    (best, s) => (!best || s.asOfDate > best.asOfDate ? s : best),
-    undefined
+  const accountSnapshots = snapshots.filter(
+    (s) => s.accountId === account.id && (!asOfCutoff || s.asOfDate <= asOfCutoff)
   );
+  // Two snapshots can legitimately share the same asOfDate (e.g. a manual
+  // correction made today to override an earlier bad entry also dated
+  // today) — a plain ">" comparison would keep whichever happened to come
+  // first out of the list, which has nothing to do with which one the
+  // user actually intended to be authoritative. Ties go to whichever was
+  // recorded most recently.
+  const latest = accountSnapshots.reduce<BalanceSnapshot | undefined>((best, s) => {
+    if (!best) return s;
+    if (s.asOfDate !== best.asOfDate) return s.asOfDate > best.asOfDate ? s : best;
+    return s.createdAt > best.createdAt ? s : best;
+  }, undefined);
 
   let balance = latest ? latest.balance : account.initialBalance;
   const sinceDate = latest?.asOfDate;

@@ -30,7 +30,7 @@ function maskIdentifier(value?: string): string | undefined {
 }
 
 export default function BankAccountsCard() {
-  const { bankAccounts, addBankAccount, deleteBankAccount, getAccountBalance } = useFinanceData();
+  const { bankAccounts, addBankAccount, deleteBankAccount, getAccountBalance, reconcileAccountBalance } = useFinanceData();
   const { show } = useToast();
 
   const [institution, setInstitution] = useState<FinancialInstitution | null>(null);
@@ -40,6 +40,26 @@ export default function BankAccountsCard() {
   const [balanceAsOfDate, setBalanceAsOfDate] = useState(todayISO());
   const [adding, setAdding] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [correctingId, setCorrectingId] = useState<string | null>(null);
+  const [correctedBalance, setCorrectedBalance] = useState(0);
+  const [correcting, setCorrecting] = useState(false);
+
+  function openCorrection(accountId: string) {
+    setCorrectingId(accountId);
+    setCorrectedBalance(getAccountBalance(accountId));
+  }
+
+  async function handleCorrectBalance() {
+    if (!correctingId) return;
+    setCorrecting(true);
+    try {
+      await reconcileAccountBalance(correctingId, correctedBalance, todayISO(), "manual");
+      show("Saldo corrigido.");
+      setCorrectingId(null);
+    } finally {
+      setCorrecting(false);
+    }
+  }
 
   function handleAddWallet() {
     setInstitution(null);
@@ -85,48 +105,86 @@ export default function BankAccountsCard() {
           {bankAccounts.map((account) => {
             const maskedId = maskIdentifier(account.externalBankAccountId);
             return (
-              <li key={account.id} className="flex items-center justify-between gap-3 py-2.5">
-                <div className="flex min-w-0 items-center gap-3">
-                  <BankLogo
-                    name={account.institutionName ?? account.name}
-                    code={account.institutionCode}
-                    logoUrl={account.institutionLogoUrl}
-                    size={32}
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-ink-900">{account.name}</p>
-                    <p className="truncate text-xs text-ink-400">
-                      {KIND_LABELS[account.kind]} · {formatCurrency(getAccountBalance(account.id))}
-                      {maskedId ? ` · ${maskedId}` : ""}
-                    </p>
-                    {account.reconciliationStatus && account.reconciliationStatus !== "unreconciled" && (
-                      <p
-                        className={`mt-0.5 flex items-center gap-1 text-xs ${
-                          account.reconciliationStatus === "discrepancy" ? "text-warning-600" : "text-success-600"
-                        }`}
-                      >
-                        {account.reconciliationStatus === "discrepancy" ? (
-                          <AlertTriangle size={11} />
-                        ) : (
-                          <CheckCircle2 size={11} />
-                        )}
-                        {account.reconciliationStatus === "discrepancy"
-                          ? "Diferença encontrada"
-                          : account.reconciliationStatus === "initial_reference"
-                            ? "Saldo inicial registrado"
-                            : "Saldo conferido"}
-                        {account.lastReconciledAt ? ` · ${formatDate(account.lastReconciledAt.slice(0, 10))}` : ""}
+              <li key={account.id} className="py-2.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <BankLogo
+                      name={account.institutionName ?? account.name}
+                      code={account.institutionCode}
+                      logoUrl={account.institutionLogoUrl}
+                      size={32}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-ink-900">{account.name}</p>
+                      <p className="truncate text-xs text-ink-400">
+                        {KIND_LABELS[account.kind]} · {formatCurrency(getAccountBalance(account.id))}
+                        {maskedId ? ` · ${maskedId}` : ""}
                       </p>
+                      {account.reconciliationStatus && account.reconciliationStatus !== "unreconciled" && (
+                        <p
+                          className={`mt-0.5 flex items-center gap-1 text-xs ${
+                            account.reconciliationStatus === "discrepancy" ? "text-warning-600" : "text-success-600"
+                          }`}
+                        >
+                          {account.reconciliationStatus === "discrepancy" ? (
+                            <AlertTriangle size={11} />
+                          ) : (
+                            <CheckCircle2 size={11} />
+                          )}
+                          {account.reconciliationStatus === "discrepancy"
+                            ? "Diferença encontrada"
+                            : account.reconciliationStatus === "initial_reference"
+                              ? "Saldo inicial registrado"
+                              : "Saldo conferido"}
+                          {account.lastReconciledAt ? ` · ${formatDate(account.lastReconciledAt.slice(0, 10))}` : ""}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {correctingId !== account.id && (
+                      <button
+                        onClick={() => openCorrection(account.id)}
+                        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-50"
+                      >
+                        Corrigir saldo
+                      </button>
                     )}
+                    <button
+                      aria-label="Remover conta"
+                      onClick={() => deleteBankAccount(account.id)}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ink-300 hover:bg-danger-500/10 hover:text-danger-600"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
-                <button
-                  aria-label="Remover conta"
-                  onClick={() => deleteBankAccount(account.id)}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ink-300 hover:bg-danger-500/10 hover:text-danger-600"
-                >
-                  <Trash2 size={14} />
-                </button>
+
+                {correctingId === account.id && (
+                  <div className="mt-2 space-y-3 rounded-xl border border-ink-100 bg-ink-50 p-3">
+                    <p className="text-xs text-ink-500">
+                      Informe o saldo real desta conta hoje — vira a nova referência e substitui a diferença encontrada.
+                    </p>
+                    <FormField label="Saldo correto">
+                      <CurrencyInput value={correctedBalance} onChange={setCorrectedBalance} />
+                    </FormField>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setCorrectingId(null)}
+                        className="flex-1 rounded-lg border border-ink-100 py-2 text-sm font-medium text-ink-600 hover:bg-surface"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={handleCorrectBalance}
+                        disabled={correcting}
+                        className="flex-1 rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                      >
+                        Salvar
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             );
           })}
