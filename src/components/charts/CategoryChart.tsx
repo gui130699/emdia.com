@@ -9,8 +9,8 @@ interface CategoryChartProps {
 
 export default function CategoryChart({ data, total }: CategoryChartProps) {
   return (
-    <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
-      <div className="relative mx-auto h-48 w-48 shrink-0">
+    <div className="flex flex-col gap-6">
+      <div className="relative mx-auto h-40 w-40 shrink-0">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie data={data} dataKey="value" nameKey="name" innerRadius={58} outerRadius={80} paddingAngle={2}>
@@ -36,14 +36,14 @@ export default function CategoryChart({ data, total }: CategoryChartProps) {
         </div>
       </div>
 
-      <ul className="flex-1 space-y-2.5">
+      <ul className="min-w-0 flex-1 space-y-2.5">
         {data.map((item) => (
-          <li key={item.categoryId} className="flex items-center justify-between gap-2 text-sm">
-            <span className="flex items-center gap-2 text-ink-700">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-              {item.name}
+          <li key={item.categoryId} className="flex min-w-0 items-center justify-between gap-2 text-sm">
+            <span className="flex min-w-0 items-center gap-2 text-ink-700">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
+              <span className="truncate">{item.name}</span>
             </span>
-            <span className="flex items-center gap-3 text-ink-500">
+            <span className="flex shrink-0 items-center gap-3 text-ink-500">
               <span className="w-10 text-right text-xs">{item.percent.toFixed(0)}%</span>
               <span className="font-semibold text-ink-900">{formatCurrency(item.value)}</span>
             </span>

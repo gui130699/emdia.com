@@ -128,9 +128,9 @@
 
 .auth-summary-chart {
   position: absolute;
-  right: 10px;
-  bottom: 12px;
-  width: 90px;
+  right: 16px;
+  top: 16px;
+  width: 56px;
   height: auto;
   opacity: 0.9;
 }

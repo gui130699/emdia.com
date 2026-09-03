@@ -6,6 +6,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { auth, storage } from "../../firebase";
 import { userProfileService } from "../../services/userProfileService";
 import { useToast } from "../../stores/ToastContext";
+import { withTimeout } from "../../utils/withTimeout";
 import Avatar from "../layout/Avatar";
 import SettingsCard from "./SettingsCard";
 import FormField from "../ui/FormField";
@@ -24,9 +25,13 @@ export default function ProfileCard() {
 
   useEffect(() => {
     if (!currentUser) return;
-    userProfileService.get(currentUser.uid).then((profile) => {
-      if (profile?.phone) setPhone(profile.phone);
-    });
+    withTimeout(userProfileService.get(currentUser.uid))
+      .then((profile) => {
+        if (profile?.phone) setPhone(profile.phone);
+      })
+      .catch(() => {
+        /* profile doc may not exist/be reachable yet — fields just stay empty */
+      });
   }, [currentUser]);
 
   async function handleSave() {
@@ -34,10 +39,10 @@ export default function ProfileCard() {
     setSaving(true);
     try {
       await updateProfile(auth.currentUser, { displayName: fullName });
-      await userProfileService.update(auth.currentUser.uid, { fullName, phone });
+      await withTimeout(userProfileService.update(auth.currentUser.uid, { fullName, phone }));
       show("Perfil atualizado com sucesso.");
     } catch {
-      show("Não foi possível salvar o perfil.", "error");
+      show("Não foi possível sincronizar com o servidor agora, mas o nome já foi atualizado na sua conta.", "error");
     } finally {
       setSaving(false);
     }

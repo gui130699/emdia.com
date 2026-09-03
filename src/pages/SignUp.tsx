@@ -44,10 +44,15 @@ export default function SignUp() {
 
       await updateProfile(credential.user, { displayName: fullName });
 
-      await setDoc(doc(db, "users", credential.user.uid), {
+      // Best-effort profile sync: the account is already usable via Firebase
+      // Auth at this point, so a Firestore hiccup (rules not configured yet,
+      // offline, etc.) must never block the user from getting into the app.
+      setDoc(doc(db, "users", credential.user.uid), {
         fullName,
         email,
         createdAt: serverTimestamp(),
+      }).catch(() => {
+        /* profile doc will be created/synced later from Configurações */
       });
 
       navigate("/");
