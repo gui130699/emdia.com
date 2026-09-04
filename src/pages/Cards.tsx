@@ -24,7 +24,7 @@ import type { CreditCard as CreditCardType } from "../types/finance";
 
 export default function Cards() {
   const { onOpenMenu } = useLayoutContext();
-  const { cards, transactions, categories, invoices, reopenInvoice, archiveCard, reactivateCard, deleteCard } = useFinanceData();
+  const { cards, transactions, categories, invoices, reopenInvoice, deleteInvoice, archiveCard, reactivateCard, deleteCard } = useFinanceData();
   const { show } = useToast();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -32,6 +32,7 @@ export default function Cards() {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [payingInvoice, setPayingInvoice] = useState(false);
   const [pendingReopenInvoiceId, setPendingReopenInvoiceId] = useState<string | null>(null);
+  const [pendingDeleteInvoiceId, setPendingDeleteInvoiceId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [invoiceHistoryCard, setInvoiceHistoryCard] = useState<CreditCardType | null>(null);
   const [pendingArchive, setPendingArchive] = useState<CreditCardType | null>(null);
@@ -119,6 +120,17 @@ export default function Cards() {
     await reopenInvoice(pendingReopenInvoiceId);
     show("Pagamento da fatura revertido.");
     setPendingReopenInvoiceId(null);
+  }
+
+  async function handleDeleteInvoice() {
+    if (!pendingDeleteInvoiceId) return;
+    const result = await deleteInvoice(pendingDeleteInvoiceId);
+    if (!result.ok) {
+      show(result.reason ?? "Não foi possível excluir esta fatura.", "error");
+    } else {
+      show("Registro da fatura excluído. As compras do ciclo continuam na sua lista de transações.");
+    }
+    setPendingDeleteInvoiceId(null);
   }
 
   function categoryName(id: string) {
@@ -258,6 +270,14 @@ export default function Cards() {
                 {activeInvoice.card.availableCredit != null && (
                   <p className="mt-3 text-xs text-ink-500">Crédito disponível informado pelo banco: {formatCurrency(activeInvoice.card.availableCredit)}</p>
                 )}
+                {activeInvoice.invoiceId && !activeInvoice.paid && !activeInvoice.partial && (
+                  <button
+                    onClick={() => setPendingDeleteInvoiceId(activeInvoice.invoiceId ?? null)}
+                    className="mt-3 w-full rounded-lg px-3 py-2 text-xs font-semibold text-danger-600 hover:bg-danger-500/10"
+                  >
+                    Excluir fatura
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setEditingCard(activeInvoice.card);
@@ -338,6 +358,14 @@ export default function Cards() {
                       className="mt-4 w-full rounded-lg bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
                     >
                       Pagar fatura
+                    </button>
+                  )}
+                  {activeInvoice.invoiceId && !activeInvoice.paid && !activeInvoice.partial && (
+                    <button
+                      onClick={() => setPendingDeleteInvoiceId(activeInvoice.invoiceId ?? null)}
+                      className="mt-2 w-full rounded-lg px-3 py-2 text-xs font-semibold text-danger-600 hover:bg-danger-500/10"
+                    >
+                      Excluir fatura
                     </button>
                   )}
                 </div>
@@ -484,6 +512,15 @@ export default function Cards() {
         confirmLabel="Reabrir"
         onConfirm={handleReopenInvoice}
         onCancel={() => setPendingReopenInvoiceId(null)}
+      />
+
+      <ConfirmDialog
+        open={!!pendingDeleteInvoiceId}
+        title="Excluir fatura"
+        message="O registro da fatura será removido. As compras, parcelas e outros lançamentos do ciclo continuam na sua lista de transações e a fatura pode voltar a ser calculada automaticamente a partir deles."
+        confirmLabel="Excluir"
+        onConfirm={handleDeleteInvoice}
+        onCancel={() => setPendingDeleteInvoiceId(null)}
       />
 
       <InvoiceHistoryModal card={invoiceHistoryCard} invoices={invoices} onClose={() => setInvoiceHistoryCard(null)} />

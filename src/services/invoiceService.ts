@@ -145,4 +145,29 @@ export const invoiceService = {
   /** Removes the paid record — the cycle falls back to being computed
    * dynamically as open/closed/overdue from its transactions again. */
   remove: (userId: string, id: string) => store.remove(userId, id),
+
+  /** Deletes just the Invoice document for an open/closed/overdue cycle —
+   * refuses for a paid or partially-paid one, which must be reopened first
+   * (that flow properly reverses each InvoicePayment and unmarks
+   * installments instead of silently discarding payment history). Never
+   * touches the underlying transactions: once the record is gone, the
+   * cycle goes back to being computed dynamically from them, exactly like
+   * before any statement was imported — the caller should tell the user
+   * that explicitly rather than implying the purchases were removed too. */
+  async deleteRecord(userId: string, invoiceId: string): Promise<{ ok: boolean; reason?: string; importBatchId?: string }> {
+    const invoice = await store.get(userId, invoiceId);
+    if (!invoice) return { ok: false, reason: "Fatura não encontrada." };
+    if (invoice.status === "paid") {
+      return { ok: false, reason: "Esta fatura está paga. Reabra o pagamento antes de excluir o registro." };
+    }
+    if (invoice.status === "partial") {
+      return { ok: false, reason: "Esta fatura tem pagamento parcial. Desfaça os pagamentos antes de excluir o registro." };
+    }
+    const payments = await invoicePaymentService.listForInvoice(userId, invoiceId);
+    if (payments.some((p) => p.status !== "reversed")) {
+      return { ok: false, reason: "Esta fatura tem pagamentos registrados. Desfaça-os antes de excluir o registro." };
+    }
+    await store.remove(userId, invoiceId);
+    return { ok: true, importBatchId: invoice.importBatchId };
+  },
 };

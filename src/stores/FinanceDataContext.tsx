@@ -170,6 +170,12 @@ interface FinanceDataValue {
   reactivateCard: (id: string) => Promise<void>;
   payInvoice: (input: PayInvoiceInput) => Promise<void>;
   reopenInvoice: (invoiceId: string) => Promise<void>;
+  /** Deletes just the Invoice record for an open/closed/overdue cycle —
+   * refused for paid/partial (reopen those first). Never removes the
+   * underlying transactions; when the invoice came from an import, the
+   * returned importBatchId lets the caller offer undoImportBatch as a
+   * separate, opt-in next step for removing those too. */
+  deleteInvoice: (invoiceId: string) => Promise<OperationResult & { importBatchId?: string }>;
   deleteInstallmentPlan: (id: string) => Promise<OperationResult>;
 
   addGoal: (input: FinancialGoalInput) => Promise<void>;
@@ -182,6 +188,13 @@ interface FinanceDataValue {
   deleteCategory: (id: string, reassignToId?: string) => Promise<void>;
 
   undoImportBatch: (id: string) => Promise<OperationResult>;
+  /** Deletes the ImportBatch history entry itself — only ever allowed once
+   * it's already "undone". Never touches categorizationRules,
+   * importMappings, importProfiles or reconciliationAliases. */
+  deleteImportBatchRecord: (id: string) => Promise<OperationResult>;
+  /** Bulk version — clears every already-undone batch at once. Returns how
+   * many were removed. */
+  clearUndoneImportBatches: () => Promise<number>;
 
   addRecurringRule: (input: RecurringBillRuleInput) => Promise<void>;
   updateRecurringRule: (id: string, patch: Partial<RecurringBillRuleInput>, cascadeToFuture: boolean) => Promise<void>;
@@ -709,6 +722,14 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         setInstallments(await installmentService.listInstallments(userId));
       },
 
+      async deleteInvoice(invoiceId) {
+        const result = await invoiceService.deleteRecord(userId, invoiceId);
+        if (result.ok) {
+          setInvoices(await invoiceService.list(userId));
+        }
+        return result;
+      },
+
       async deleteInstallmentPlan(id) {
         const result = await installmentService.deletePlan(userId, id);
         setTransactions(await transactionService.list(userId));
@@ -758,6 +779,18 @@ export function FinanceDataProvider({ children }: { children: ReactNode }) {
         const result = await importService.undo(userId, id);
         await reloadAll();
         return result;
+      },
+      async deleteImportBatchRecord(id) {
+        const result = await importService.deleteBatchRecord(userId, id);
+        if (result.ok) {
+          setImportBatches(await importService.listBatches(userId));
+        }
+        return result;
+      },
+      async clearUndoneImportBatches() {
+        const count = await importService.clearUndoneBatches(userId);
+        setImportBatches(await importService.listBatches(userId));
+        return count;
       },
 
       async addRecurringRule(input) {

@@ -1235,4 +1235,32 @@ export const importService = {
     await batchStore.update(userId, batchId, { status: "undone" });
     return { ok: true };
   },
+
+  /** Removes only the ImportBatch record itself, once it's already been
+   * undone — the history entry, not the data. Never allowed on a
+   * "completed" batch directly (undo it first): this only ever deletes a
+   * record whose transactions/snapshots/invoices were already reversed by
+   * undo(), and it never touches categorizationRules, importMappings,
+   * importProfiles or reconciliationAliases — those are learned behavior
+   * the user built up, not part of this one file's history. */
+  async deleteBatchRecord(userId: string, batchId: string): Promise<{ ok: boolean; reason?: string }> {
+    const batch = await batchStore.get(userId, batchId);
+    if (!batch) return { ok: false, reason: "Importação não encontrada." };
+    if (batch.status !== "undone") {
+      return { ok: false, reason: "Desfaça esta importação antes de excluir o registro." };
+    }
+    await batchStore.remove(userId, batchId);
+    return { ok: true };
+  },
+
+  /** Bulk version of deleteBatchRecord — clears every already-undone batch
+   * at once, still never touching a "completed" one. */
+  async clearUndoneBatches(userId: string): Promise<number> {
+    const all = await batchStore.list(userId);
+    const undone = all.filter((b) => b.status === "undone");
+    for (const b of undone) {
+      await batchStore.remove(userId, b.id);
+    }
+    return undone.length;
+  },
 };
