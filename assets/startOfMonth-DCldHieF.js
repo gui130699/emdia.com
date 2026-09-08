@@ -1,0 +1,1 @@
+import{q as e}from"./index-DA1lYNca.js";function t(t,n){let r=e(t,n?.in);return r.setDate(1),r.setHours(0,0,0,0),r}export{t};
